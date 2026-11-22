@@ -21,3 +21,8 @@ verify
 Dockerfile
 *.md
 !README.md
+**/.env
+**/*.env
+**/*.pem
+**/*.key
+**/id_*

@@ -10,7 +10,7 @@ The hosted URL used in the plugin and in the agent configs below is:
 https://jdad-mcp.jondevs.com/mcp
 ```
 
-JDAD runs as the only Docker container on a DigitalOcean droplet. Cloudflare's orange-cloud proxy terminates TLS for `https://jdad-mcp.jondevs.com`. There is no tunnel and no Access. Clients send `Authorization: Bearer`. `/healthz` is the liveness probe on the same origin.
+JDAD runs as the only Docker container on a DigitalOcean droplet. Cloudflare's orange-cloud proxy terminates TLS for `https://jdad-mcp.jondevs.com` and connects to the origin with Full (strict) TLS. There is no tunnel, no Access, and no plaintext hop to the origin. Clients send `Authorization: Bearer`. `/healthz` is the liveness probe on the same origin. Plain HTTP is not supported for the public deploy.
 
 ## Layout
 
@@ -156,19 +156,40 @@ Stdio still works if you would rather run the server locally, including `uvx --f
 
 ## Deploy on a droplet with Docker behind Cloudflare proxy
 
-This is the supported deploy. JDAD is the only container on the droplet. Cloudflare's orange-cloud proxy terminates TLS for `https://jdad-mcp.jondevs.com` and forwards to the origin on port 80. There is no tunnel and no Access.
+This is the supported deploy. JDAD is the only container on the droplet. Cloudflare's orange-cloud proxy terminates TLS for `https://jdad-mcp.jondevs.com` and forwards to the origin on port 443 with **Full (strict)** TLS. There is no tunnel and no Access. Plain HTTP (including Cloudflare Flexible SSL) is not supported for this public deploy: the Cloudflare-to-origin hop must be TLS, using a [Cloudflare Origin CA certificate](https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/) whose private key never leaves the droplet.
 
-The Cloudflare SSL/TLS mode for this setup is **Flexible**. The Cloudflare-to-origin hop is plain HTTP. Restrict port 80 to Cloudflare IP ranges (below) so the origin is not reachable in the clear from the public internet. The recommended hardening step is to switch to **Full** (or Full (strict)) and install a [Cloudflare Origin Certificate](https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/) on the droplet, then serve TLS on the origin instead of plaintext port 80.
+SSL/TLS mode in Cloudflare is zone-wide. Set a **Configuration Rule** that applies **Full (strict)** only to `jdad-mcp.jondevs.com` (Rules → Configuration Rules → hostname equals `jdad-mcp.jondevs.com` → SSL → Full (strict)), so other hostnames in the zone are not forced onto this mode.
+
+Authenticated Origin Pulls are an optional extra: they make Cloudflare present a client certificate so the origin can reject traffic that did not come through Cloudflare. This compose file does not yet verify origin-pull client certs; if you add them later, terminate or verify that client cert in front of `jdad-mcp` and still keep Full (strict).
+
+### Origin certificate (private key stays on the droplet)
+
+1. On the droplet, as the deploy user:
+
+   ```bash
+   mkdir -p ~/.config/jdad/tls
+   chmod 700 ~/.config/jdad ~/.config/jdad/tls
+   openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+     -keyout ~/.config/jdad/tls/origin.key \
+     -out ~/.config/jdad/tls/origin.csr \
+     -subj "/CN=jdad-mcp.jondevs.com"
+   chmod 600 ~/.config/jdad/tls/origin.key
+   ```
+
+   The private key must be readable only by the uid the container runs as (the deploy user: `update-docker.sh` and compose set `user:` to `$(id -u):$(id -g)`). Mode `0600` or `0400`, owned by that user. Never copy the key off the droplet. The CSR is not secret.
+
+2. In the Cloudflare dashboard: SSL/TLS → Origin Server → Create Certificate → **Use my private key and CSR**. Paste only the CSR. Save the returned certificate as `~/.config/jdad/tls/origin.crt` (mode `0644` is fine).
 
 ### Firewall
 
 Create a DigitalOcean cloud firewall attached to the droplet:
 
-- Inbound TCP 80 (and 443 if you later move to Full) only from [Cloudflare IP ranges](https://www.cloudflare.com/ips/). Use both IPv4 and IPv6 lists.
+- Inbound TCP 443 only from [Cloudflare IP ranges](https://www.cloudflare.com/ips/). Use both IPv4 and IPv6 lists.
 - Inbound SSH only from your own IPs.
+- Do not publish port 80.
 - Leave outbound open, or at least allow the origin to reach Cloudflare and GitHub.
 
-Do this in the DigitalOcean control panel (or `doctl compute firewall`); a host-local `ufw` rule is not a substitute for the cloud firewall.
+Do this in the DigitalOcean control panel (or `doctl compute firewall`); a host-local `ufw` rule is not a substitute for the cloud firewall. Docker-published ports bypass ufw.
 
 ### Read-only deploy key
 
@@ -198,33 +219,46 @@ The checkout on the droplet pulls this private repo as the deploy user (no passw
 
    Mode `0600` on the key, the config, and (after pinning) `known_hosts`.
 
-### First install and updates
+### Token and first install
+
+Generate the bearer token straight into the env file; never echo it. To rotate, write a new token the same way, run `./deploy/update-docker.sh`, then update every client. The previous token stops working immediately.
 
 ```bash
 # as the deploy user, who can talk to the docker daemon
 git clone git@github.com:JongoDB/jdad.git
 cd jdad
 
+umask 077
 mkdir -p ~/.config/jdad
-chmod 700 ~/.config/jdad
-cp deploy/jdad.env.example ~/.config/jdad/jdad.env
+{
+  printf 'JDAD_TOKEN='
+  openssl rand -hex 32
+  printf 'JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com\n'
+} > ~/.config/jdad/jdad.env
 chmod 600 ~/.config/jdad/jdad.env
-# set a non-empty JDAD_TOKEN; leave JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com
 # do not commit this file
 
+# Origin cert and key must already be in ~/.config/jdad/tls/ as above
+export JDAD_GIT_SHA="$(git rev-parse HEAD)"
+export JDAD_UID="$(id -u)"
+export JDAD_GID="$(id -g)"
 docker compose -f deploy/docker-compose.yml up -d --build
-curl -fsS http://127.0.0.1/healthz
+# Local probe uses -k because the Origin CA is not in the public trust
+# store and the URL is 127.0.0.1, not the certificate hostname.
+curl -fsSk https://127.0.0.1/healthz
 ```
 
-`deploy/docker-compose.yml` builds from the repo, publishes `80:8765`, restarts unless stopped, reads `~/.config/jdad/jdad.env`, sets `JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com`, and runs with a read-only root filesystem, `tmpfs` on `/tmp`, `cap_drop: [ALL]`, and `no-new-privileges`. The image runs as a non-root user and binds `0.0.0.0:8765` inside the container, so it will refuse to start without `JDAD_TOKEN`.
+`deploy/docker-compose.yml` uses the project name `jdad` (so this first install and `update-docker.sh` are the same compose project), builds from the repo with `JDAD_GIT_SHA` baked into the image, publishes `443:8443`, restarts unless stopped, reads `~/.config/jdad/jdad.env`, mounts `~/.config/jdad/tls/` read-only, sets `JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com` (Origin `https://jdad-mcp.jondevs.com` is also allowed), and runs with a read-only root filesystem, `tmpfs` on `/tmp`, `cap_drop: [ALL]`, and `no-new-privileges`. The container process runs as the deploy user's uid so it can read a `0600` key. It binds `0.0.0.0:8443` with TLS, so it will refuse to start without `JDAD_TOKEN`. `--allow-no-auth` is not used.
 
-Later updates (idempotent; fails loudly if pull, build, or healthz fails):
+`jdad-mcp` also accepts `--ssl-certfile` / `--ssl-keyfile`, or `JDAD_SSL_CERTFILE` / `JDAD_SSL_KEYFILE`.
+
+Later updates (idempotent; prechecks the env file and cert; fails loudly; rolls back to the previous image if healthz fails):
 
 ```bash
 ./deploy/update-docker.sh
 ```
 
-That does `git pull --ff-only`, `docker compose up -d --build`, then curls `http://127.0.0.1/healthz` and requires `{"status":"ok"}`.
+That sets `JDAD_GIT_SHA` from `git rev-parse HEAD`, does `git pull --ff-only`, `docker compose up -d --build`, then curls `https://127.0.0.1/healthz` and requires `{"status":"ok"}`.
 
 ## Alternative: systemd on a host
 
@@ -339,4 +373,4 @@ uv sync
 ./verify
 ```
 
-`./verify` runs `bash -n` on each deploy script, a version-lockstep check, a sandboxed invocation/token-parsing check (it drops privileges if run as root, and will not run a real `install.sh` against the host), a Docker image smoke test when Docker is available (it skips with a note when it isn't), ruff, pytest, `uv build`, and `claude plugin validate` when the Claude CLI is on `PATH` (it skips that last step with a note when it isn't). GitHub Actions is set up to run the same script on pull requests and on pushes to `main`, with `permissions: contents: read` and actions pinned to SHAs. That check is currently billing-blocked on this repo (red check; the job never starts), so local `./verify` is the proof until billing is fixed.
+`./verify` runs `bash -n` on each deploy script, a version-lockstep check, a sandboxed invocation/token-parsing check (it drops privileges if run as root, and will not run a real `install.sh` against the host), a Docker image and compose smoke test when Docker is available (it skips with a note when it isn't), ruff, pytest, `uv build`, and `claude plugin validate` when the Claude CLI is on `PATH` (it skips that last step with a note when it isn't). GitHub Actions is set up to run the same script on pull requests and on pushes to `main`, with `permissions: contents: read` and actions pinned to SHAs. That check is currently billing-blocked on this repo (red check; the job never starts), so local `./verify` is the proof until billing is fixed.

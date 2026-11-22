@@ -1,22 +1,34 @@
-# JDAD on the droplet: the only container, published on port 80 so
-# Cloudflare's orange-cloud proxy can reach it. Run as the deploy user
-# from the repo checkout (no passwordless sudo).
+# JDAD on the droplet: the only container, published on port 443 so
+# Cloudflare's orange-cloud proxy can reach it with Full (strict) TLS.
+# Run as the deploy user from the repo checkout (no passwordless sudo).
 #
-# Env file (mode 0600): ~/.config/jdad/jdad.env
-# Must set a non-empty JDAD_TOKEN. JDAD_ALLOWED_HOSTS is set below.
+# Env file (mode 0600): ~/.config/jdad/jdad.env — must set a non-empty
+# JDAD_TOKEN. Origin cert/key: ~/.config/jdad/tls/{origin.crt,origin.key}.
+# Build with JDAD_GIT_SHA=$(git rev-parse HEAD).
+
+name: jdad
 
 services:
   jdad:
+    image: jdad:${JDAD_GIT_SHA:-unknown}
     build:
       context: ..
       dockerfile: Dockerfile
+      args:
+        JDAD_GIT_SHA: ${JDAD_GIT_SHA:-unknown}
+    user: "${JDAD_UID:-1000}:${JDAD_GID:-1000}"
+    command: ["jdad-mcp", "--http", "--host", "0.0.0.0", "--port", "8443"]
     ports:
-      - "80:8765"
+      - "443:8443"
     restart: unless-stopped
     env_file:
       - ${HOME}/.config/jdad/jdad.env
     environment:
       JDAD_ALLOWED_HOSTS: jdad-mcp.jondevs.com
+      JDAD_SSL_CERTFILE: /tls/origin.crt
+      JDAD_SSL_KEYFILE: /tls/origin.key
+    volumes:
+      - ${HOME}/.config/jdad/tls:/tls:ro
     read_only: true
     tmpfs:
       - /tmp
@@ -24,3 +36,15 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import ssl, urllib.request; c=ssl._create_unverified_context(); urllib.request.urlopen('https://127.0.0.1:8443/healthz', context=c, timeout=4).read()",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3

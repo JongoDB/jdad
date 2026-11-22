@@ -502,3 +502,47 @@ def test_allowed_hosts_include_public_origin(monkeypatch: pytest.MonkeyPatch) ->
     assert "jdad-mcp.jondevs.com:*" in settings.allowed_hosts
     assert "https://jdad-mcp.jondevs.com" in settings.allowed_origins
     assert "https://jdad-mcp.jondevs.com:*" in settings.allowed_origins
+
+
+def test_quoted_empty_token_is_unset() -> None:
+    from jdad.server import InsecureBindError, check_http_bind, normalize_secret
+
+    assert normalize_secret("") == ""
+    assert normalize_secret("   ") == ""
+    assert normalize_secret('""') == ""
+    assert normalize_secret("''") == ""
+    assert normalize_secret('"secret"') == "secret"
+    with pytest.raises(InsecureBindError, match="refusing to bind"):
+        check_http_bind("0.0.0.0", allow_no_auth=False, token='""')
+
+
+def test_http_initialize_reports_package_version(http_server: _HttpServer) -> None:
+    from jdad import __version__
+
+    response = httpx2.post(
+        f"{http_server.base}/mcp",
+        headers={
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+        },
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "jdad-tests", "version": "0"},
+            },
+        },
+        timeout=5,
+    )
+    assert response.status_code == 200
+    text = response.text
+    if "data:" in text:
+        lines = [line[5:].strip() for line in text.splitlines() if line.startswith("data:")]
+        text = lines[-1] if lines else text
+    payload = json.loads(text)
+    info = payload["result"]["serverInfo"]
+    assert info["name"] == "jdad"
+    assert info["version"] == __version__

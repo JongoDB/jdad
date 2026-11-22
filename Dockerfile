@@ -1,10 +1,12 @@
 # syntax=docker/dockerfile:1
-# Multi-stage image for jdad-mcp. The runtime bind is 0.0.0.0:8765, so
+# Multi-stage image for jdad-mcp. The runtime bind is 0.0.0.0, so
 # JDAD_TOKEN must be set; --allow-no-auth is not used here.
+# Public deploy enables TLS on 8443 via compose (see deploy/docker-compose.yml).
 
-FROM python:3.12-slim AS builder
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS builder
 
-COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /usr/local/bin/uv
+COPY --from=ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff \
+    /uv /usr/local/bin/uv
 
 WORKDIR /src
 ENV UV_COMPILE_BYTECODE=1 \
@@ -21,12 +23,20 @@ COPY sources ./sources
 # bundled into the venv as package data.
 RUN uv sync --frozen --no-dev --no-editable
 
-FROM python:3.12-slim AS runtime
+FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS runtime
 
-RUN useradd --system --user-group --create-home --home-dir /app \
-    --shell /usr/sbin/nologin jdad
+ARG JDAD_GIT_SHA=unknown
+ENV JDAD_GIT_SHA=$JDAD_GIT_SHA
 
-COPY --from=builder --chown=jdad:jdad /app/.venv /app/.venv
+RUN useradd --system --user-group --uid 999 --create-home --home-dir /app \
+    --shell /usr/sbin/nologin jdad \
+    && chmod 755 /app
+# useradd creates /app as 0700. Compose runs as the deploy uid so a 0600
+# TLS key is readable without chown; /app must stay world-traversable so
+# that uid can exec /app/.venv/bin/jdad-mcp.
+
+# Root-owned venv: the app user can execute it but cannot overwrite the code.
+COPY --from=builder /app/.venv /app/.venv
 
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -34,8 +44,10 @@ ENV PATH="/app/.venv/bin:$PATH" \
 
 USER jdad
 WORKDIR /app
-EXPOSE 8765
+EXPOSE 8765 8443
 
+# Default HEALTHCHECK is HTTP on 8765 (docker run without TLS).
+# The compose file overrides this for HTTPS on 8443.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/healthz', timeout=4).read()"
 

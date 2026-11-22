@@ -14,6 +14,7 @@ from mcp.types import ToolAnnotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
+from jdad import __version__
 from jdad.kb import KnowledgeBase
 
 logger = logging.getLogger("jdad")
@@ -27,6 +28,7 @@ READ_ONLY = ToolAnnotations(
 
 mcp = MCPServer(
     "jdad",
+    version=__version__,
     instructions=(
         "Read-only knowledge base of Jon's agentic-dev practices (JDAD). "
         "Call get_checklist or search_practices before planning, and cite the "
@@ -118,8 +120,22 @@ async def healthz(_request: Request) -> Response:
     return JSONResponse({"status": "ok"})
 
 
+def normalize_secret(raw: str | None) -> str:
+    """Treat empty, whitespace-only, and quote-wrapped-empty values as unset.
+
+    `docker run --env-file` with `JDAD_TOKEN=""` passes the literal quotes;
+    Compose strips them. Either form must be treated as no token.
+    """
+    if raw is None:
+        return ""
+    text = raw.strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        text = text[1:-1].strip()
+    return text
+
+
 def _configured_token() -> str:
-    return os.environ.get("JDAD_TOKEN", "").strip()
+    return normalize_secret(os.environ.get("JDAD_TOKEN"))
 
 
 def _bearer_token(header: str | None) -> str | None:
@@ -192,7 +208,7 @@ def check_http_bind(host: str, *, allow_no_auth: bool, token: str | None = None)
     """Refuse a non-loopback bind without a token unless --allow-no-auth is set."""
     if is_loopback(host):
         return
-    expected = (token if token is not None else _configured_token()).strip()
+    expected = normalize_secret(token if token is not None else _configured_token())
     if expected:
         return
     if allow_no_auth:
@@ -314,7 +330,38 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Allow a non-loopback HTTP bind when JDAD_TOKEN is unset (logs a warning).",
     )
+    parser.add_argument(
+        "--ssl-certfile",
+        default=None,
+        help="PEM certificate for HTTPS (or set JDAD_SSL_CERTFILE).",
+    )
+    parser.add_argument(
+        "--ssl-keyfile",
+        default=None,
+        help="PEM private key for HTTPS (or set JDAD_SSL_KEYFILE).",
+    )
     return parser.parse_args(argv)
+
+
+def resolve_ssl_files(
+    certfile: str | None = None, keyfile: str | None = None
+) -> tuple[str | None, str | None]:
+    """Return (cert, key) or (None, None). Both must be set together."""
+    cert = (certfile or os.environ.get("JDAD_SSL_CERTFILE") or "").strip()
+    key = (keyfile or os.environ.get("JDAD_SSL_KEYFILE") or "").strip()
+    if cert and key:
+        if not os.path.isfile(cert) or not os.path.isfile(key):
+            raise SystemExit(
+                "jdad-mcp: SSL certificate or key file is missing "
+                f"(cert={cert!r} key={key!r})"
+            )
+        return cert, key
+    if cert or key:
+        raise SystemExit(
+            "jdad-mcp: both --ssl-certfile and --ssl-keyfile "
+            "(or JDAD_SSL_CERTFILE and JDAD_SSL_KEYFILE) are required together"
+        )
+    return None, None
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -323,7 +370,12 @@ def main(argv: list[str] | None = None) -> None:
         import uvicorn
 
         check_http_bind(args.host, allow_no_auth=args.allow_no_auth)
-        uvicorn.run(create_http_app(), host=args.host, port=args.port)
+        cert, key = resolve_ssl_files(args.ssl_certfile, args.ssl_keyfile)
+        run_kw: dict[str, object] = {"host": args.host, "port": args.port}
+        if cert and key:
+            run_kw["ssl_certfile"] = cert
+            run_kw["ssl_keyfile"] = key
+        uvicorn.run(create_http_app(), **run_kw)
     else:
         mcp.run()
 
