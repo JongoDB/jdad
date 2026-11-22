@@ -60,7 +60,7 @@ cleanup() {
     HOME="$TESTHOME" JDAD_GIT_SHA="$SHA" JDAD_UID="$(id -u)" JDAD_GID="$(id -g)" \
       "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true
   fi
-  docker rm -f "$TAG_ID-token-quote" "$TAG_ID-canary-ctr" >/dev/null 2>&1 || true
+  docker rm -f "$TAG_ID-token-quote" "$TAG_ID-canary-ctr" "$TAG_ID-legacy-probe" >/dev/null 2>&1 || true
   local refs
   refs="$(docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -E "^($IMG|$CANARY_IMG):" || true)"
   if [[ -n "$refs" ]]; then
@@ -588,3 +588,89 @@ if [[ "$(running_image)" != "$IMG:$GOOD" ]]; then
   exit 1
 fi
 echo "ok a SHA that failed before is refused on the next run"
+
+# --- rollback to an image from before the token file (Checker, PR #9).
+# Those images read only JDAD_TOKEN, so with docker-compose.yml alone a
+# rollback to one refuses to start. update-docker.sh must notice (no
+# io.jdad.token-file label) and pass the token from the file.
+# Default: a stand-in derived from the good image that ignores
+# JDAD_TOKEN_FILE and has no label value. JDAD_TEST_LEGACY_REF=<git ref>
+# builds the real image from that commit instead (e.g. origin/main before
+# the token file landed).
+if [[ -n "${JDAD_TEST_LEGACY_REF:-}" ]]; then
+  LEGACY_SHA="$(git -C "$ROOT" rev-parse "${JDAD_TEST_LEGACY_REF}^{commit}")"
+  mkdir -p "$WORKDIR/legacy"
+  git -C "$ROOT" archive "$LEGACY_SHA" | tar -xf - -C "$WORKDIR/legacy"
+  docker build -q -t "$IMG:$LEGACY_SHA" --build-arg JDAD_GIT_SHA="$LEGACY_SHA" "$WORKDIR/legacy" >/dev/null
+  LEGACY_KB_SHA="$LEGACY_SHA"
+  legacy_kind="real image from $JDAD_TEST_LEGACY_REF"
+else
+  LEGACY_SHA="1111111111111111111111111111111111111111"
+  mkdir -p "$WORKDIR/legacy"
+  printf 'FROM %s\nLABEL io.jdad.token-file=""\nENTRYPOINT ["env", "-u", "JDAD_TOKEN_FILE"]\n' "$IMG:$GOOD" \
+    > "$WORKDIR/legacy/Dockerfile"
+  docker build -q -t "$IMG:$LEGACY_SHA" "$WORKDIR/legacy" >/dev/null
+  LEGACY_KB_SHA="$GOOD"
+  legacy_kind="stand-in that reads only JDAD_TOKEN"
+fi
+
+# The stand-in (or real image) really can't start from the token file alone.
+docker rm -f "$TAG_ID-legacy-probe" >/dev/null 2>&1 || true
+docker run -d --name "$TAG_ID-legacy-probe" -e JDAD_TOKEN_FILE=/run/secrets/jdad_token \
+  "$IMG:$LEGACY_SHA" jdad-mcp --http --host 0.0.0.0 --port 8443 >/dev/null
+sleep 3
+probe_state="$(docker inspect -f '{{.State.Running}} {{.State.ExitCode}}' "$TAG_ID-legacy-probe")"
+docker rm -f "$TAG_ID-legacy-probe" >/dev/null 2>&1 || true
+if [[ "$probe_state" == "true "* || "$probe_state" == "false 0" ]]; then
+  echo "FAIL the legacy image started without JDAD_TOKEN ($probe_state); the test models nothing" >&2
+  exit 1
+fi
+
+# Make it the running deploy, the way update-docker.sh would roll back to it.
+JDAD_TOKEN="$(<"$TESTHOME/.config/jdad/token")" JDAD_GIT_SHA="$LEGACY_SHA" \
+  "${COMPOSE[@]}" -f "$ROOT/deploy/compose.legacy-token.yml" up -d --no-build --force-recreate >/dev/null 2>&1
+wait_healthy || { "${COMPOSE[@]}" logs >&2 || true; echo "FAIL legacy image not healthy with the override" >&2; exit 1; }
+
+# The clone's HEAD is still the broken commit (already marked failed, so
+# JDAD_RETRY_FAILED=1): the update fails and must roll back to the legacy
+# image and come up healthy.
+if JDAD_RETRY_FAILED=1 run_update > "$WORKDIR/legacy-rollback.log" 2>&1; then
+  echo "FAIL update-docker.sh reported success for a broken commit" >&2
+  cat "$WORKDIR/legacy-rollback.log" >&2
+  exit 1
+fi
+grep -q "predates the token file" "$WORKDIR/legacy-rollback.log" \
+  && grep -q "rolled back to $IMG:$LEGACY_SHA and .* is ok" "$WORKDIR/legacy-rollback.log" \
+  || { cat "$WORKDIR/legacy-rollback.log" >&2; echo "FAIL no healthy legacy rollback in the log" >&2; exit 1; }
+if [[ "$(running_image)" != "$IMG:$LEGACY_SHA" ]]; then
+  echo "FAIL after the legacy rollback, running image is $(running_image)" >&2
+  exit 1
+fi
+wait_healthy || { echo "FAIL service not healthy after the legacy rollback" >&2; exit 1; }
+check_kb_sha "$(base_url)" "$LEGACY_KB_SHA"   # authenticated call with the file's token
+# The checkout must stay put: the legacy commit's own update-docker.sh would
+# refuse the migrated env file before it could pull anything.
+if [[ "$(git -C "$CLONE" rev-parse HEAD)" != "$BROKEN" ]]; then
+  echo "FAIL a legacy rollback moved the checkout to $(git -C "$CLONE" rev-parse HEAD)" >&2
+  exit 1
+fi
+grep -q "leaving the checkout on" "$WORKDIR/legacy-rollback.log" \
+  || { cat "$WORKDIR/legacy-rollback.log" >&2; echo "FAIL no 'leaving the checkout' note" >&2; exit 1; }
+if grep -qF "$(<"$TESTHOME/.config/jdad/token")" "$WORKDIR/legacy-rollback.log"; then
+  echo "FAIL the token value appears in the update log" >&2
+  exit 1
+fi
+
+# The next good deploy drops the override: no JDAD_TOKEN in the environment.
+git -C "$CLONE" reset -q --hard "$GOOD"   # scratch clone only
+if ! run_update > "$WORKDIR/legacy-forward.log" 2>&1; then
+  cat "$WORKDIR/legacy-forward.log" >&2
+  echo "FAIL update-docker.sh did not deploy the good commit after a legacy rollback" >&2
+  exit 1
+fi
+[[ "$(running_image)" == "$IMG:$GOOD" ]] || { echo "FAIL running $(running_image), expected $IMG:$GOOD" >&2; exit 1; }
+if docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$("${COMPOSE[@]}" ps -q jdad)" | grep -q '^JDAD_TOKEN='; then
+  echo "FAIL JDAD_TOKEN is still in the container environment after a normal deploy" >&2
+  exit 1
+fi
+echo "ok rollback to a pre-token-file image ($legacy_kind) passes JDAD_TOKEN from the file; the next deploy drops it"
