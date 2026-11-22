@@ -6,8 +6,14 @@ content that tries to steer an agent rather than inform it:
 
 - ``injection``: text addressed to an AI agent (``ignore previous
   instructions``, fake ``system:`` turns, chat-template tokens, ``don't tell
-  the user``, requests to send secrets). practices/ and sources/.
-- ``url``: a URL in practices/ whose host isn't in ``url_allow``.
+  the user``, requests to send secrets). practices/ and sources/. Matched
+  on a skeleton of the text (NFKD, combining marks dropped, Cyrillic and
+  Greek lookalikes mapped to Latin), per line and per paragraph, so a
+  phrase split across lines or spelled with homoglyphs is still caught.
+- ``url``: a URL in practices/ whose host isn't in ``url_allow``, including
+  a bare domain with no scheme or ``www`` (``evil.example.com/x``).
+- ``html``: a raw HTML tag outside code (``<img onerror=...>``, ``<span
+  hidden>``). practices/ and sources/.
 - ``shell``: a shell command in practices/ (code spans and blocks with
   risky commands, ``$ `` prompts, pipe-to-shell anywhere) not in
   ``shell_allow``.
@@ -15,10 +21,14 @@ content that tries to steer an agent rather than inform it:
   characters, private-use and stray control characters.
 - ``comment``: HTML comments and Markdown link-reference comments, which
   render as nothing but are read by agents.
+- ``homoglyph``: a word that mixes Latin with Cyrillic or Greek letters.
 - ``symlink``: a symlink anywhere in the KB trees.
 - ``encoding``: a file that isn't valid UTF-8.
 - ``file-type``: a file in any KB tree that isn't named ``*.md`` (lowercase).
 - ``size``: a file over MAX_KB_FILE_BYTES (1 MiB); the server refuses to read it.
+
+Hidden-unicode, comment, homoglyph, symlink, encoding, file-type and size run
+on practices/, sources/, skills/ and commands/.
 
 Structure checks (practices/*.md, docs/kb-schema.md):
 
@@ -29,8 +39,6 @@ Structure checks (practices/*.md, docs/kb-schema.md):
 - ``rule-format``: nested or numbered items, prose in a section, a rule
   before the first section, or a section with no rules. The parser keeps
   such text (it isn't dropped from checklists), but the KB must not rely on it.
-
-The last four run on practices/, sources/, skills/ and commands/.
 
 Configuration lives in ``kb-lint.toml`` at the KB root. An exception names
 the check, the path and the SHA-256 of the exact offending line, so editing
@@ -67,8 +75,14 @@ _INJECTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
     for pattern, why in (
         (
             (r"\b(ignore|disregard|forget|override)\b[^.\n]{0,40}\b(instructions?|rules|guidelines|"
-            r"prompts?|directives|the above|everything above)\b"),
+            r"guidance|directions?|prompts?|directives|the above|everything above)\b"),
             "tells the reader to drop its instructions",
+        ),
+        (
+            (r"\b(ignore|disregard|forget|override|drop|discard|abandon|bypass)\b[^.\n]{0,30}"
+            r"\b(previous|prior|earlier|above|preceding|original|initial|existing)\b[^.\n]{0,20}"
+            r"\b(context|constraints|polic(y|ies)|commands|orders|messages|training|programming)\b"),
+            "tells the reader to drop what it was told before",
         ),
         (r"\b(system|developer)\s+(prompt|message)\b", "refers to the agent's system or developer prompt"),
         (r"\byou\s+are\s+(now|no\s+longer)\b", "tries to reassign the agent's role"),
@@ -119,6 +133,35 @@ _FENCE_RE = re.compile(r"^\s*(```|~~~)\s*([\w+-]*)")
 _SHELL_LANGS = frozenset({"sh", "bash", "zsh", "shell", "console", "shell-session", "powershell", "ps1", "pwsh", "cmd", "bat"})
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _HTML_COMMENT_RE = re.compile(r"<!--")
+# A tag name right after "<" (browsers treat "< b" as text). "<https://x>"
+# autolinks don't match: the name must be followed by space, "/" or ">".
+_HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])")
+# Bare domains (no scheme, no www.) in practices/. Strong TLDs always count;
+# TLDs that double as file extensions (README.md, install.sh) count only
+# with a path after them (get.sh/start).
+_BARE_DOMAIN_RE = re.compile(
+    r"(?<![\w@./:%-])(?!www\.)((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,24}))(/\S*)?",
+    re.IGNORECASE,
+)
+_STRONG_TLDS = frozenset(
+    ["com", "net", "org", "io", "dev", "app", "co", "ai", "xyz", "info", "biz", "ly", "gg", "cc", "tk", "ru", "cn", "top", "site", "online", "link", "click", "live", "store", "tech", "cloud", "page", "run", "pro", "us", "uk", "de", "fr", "eu", "ca", "au", "me", "tv", "ws", "su", "pw", "icu", "shop", "work"]
+)
+_PATH_ONLY_TLDS = frozenset(["md", "sh", "py", "rs", "pl", "so", "to", "it", "is", "at", "in", "do", "ms", "ps", "zip", "mov", "sk", "lk"])
+# Cyrillic and Greek letters that render like Latin ones: a subset of
+# Unicode's confusables.txt, enough for English prose. Code points rather
+# than literals, so this file holds no homoglyphs itself.
+_CONFUSABLES = {
+    0x0430: "a", 0x0435: "e", 0x043E: "o", 0x0440: "p", 0x0441: "c", 0x0443: "y", 0x0445: "x",
+    0x0456: "i", 0x0458: "j", 0x0455: "s", 0x0501: "d", 0x04BB: "h", 0x04CF: "l", 0x051B: "q",
+    0x051D: "w", 0x0410: "A", 0x0412: "B", 0x0415: "E", 0x041A: "K", 0x041C: "M", 0x041D: "H",
+    0x041E: "O", 0x0420: "P", 0x0421: "C", 0x0422: "T", 0x0425: "X", 0x0406: "I", 0x0408: "J",
+    0x0405: "S", 0x03B1: "a", 0x03BF: "o", 0x03C1: "p", 0x03BD: "v", 0x03B9: "i", 0x03BA: "k",
+    0x03C4: "t", 0x03C5: "u", 0x0391: "A", 0x0392: "B", 0x0395: "E", 0x0396: "Z", 0x0397: "H",
+    0x0399: "I", 0x039A: "K", 0x039C: "M", 0x039D: "N", 0x039F: "O", 0x03A1: "P", 0x03A4: "T",
+    0x03A5: "Y", 0x03A7: "X",
+}
+_LETTER_RUN_RE = re.compile(r"[^\W\d_]+")
+_SCRIPTS = ("LATIN", "CYRILLIC", "GREEK")
 _MD_COMMENT_RE = re.compile(r"^\s*\[[^\]]*\]:\s*(#|<>)")
 # Lines are split on "\n" only (a trailing "\r" is dropped first), so every
 # other separator and control character reaches the hidden-character check.
@@ -248,6 +291,79 @@ def _shell_findings(rel: str, lines: list[str], allow: tuple[str, ...]) -> list[
     return findings
 
 
+def _skeleton(text: str) -> str:
+    """Text as the injection patterns see it: compatibility forms folded,
+    combining marks dropped, Cyrillic/Greek lookalikes mapped to Latin."""
+    folded = unicodedata.normalize("NFKD", text)
+    return "".join(ch for ch in folded if unicodedata.category(ch) != "Mn").translate(_CONFUSABLES)
+
+
+def _mixed_script_words(line: str) -> list[str]:
+    words = []
+    for match in _LETTER_RUN_RE.finditer(line):
+        scripts = {
+            name.split(" ", 1)[0]
+            for name in (unicodedata.name(ch, "") for ch in match.group(0))
+            if name.startswith(_SCRIPTS)
+        }
+        if len(scripts) > 1:
+            words.append(match.group(0))
+    return words
+
+
+def _injection_findings(rel: str, lines: list[str]) -> list[Finding]:
+    """Per line, then per paragraph (non-blank lines joined with spaces), so
+    "ignore all previous" / "instructions" on two lines is still one phrase."""
+    findings: list[Finding] = []
+    flagged: set[int] = set()
+    skeletons = [_skeleton(line) for line in lines]
+    for number, skeleton in enumerate(skeletons, start=1):
+        for pattern, why in _INJECTION_PATTERNS:
+            if pattern.search(skeleton):
+                findings.append(Finding(rel, number, "injection", f"agent-directed text: {why}", lines[number - 1]))
+                flagged.add(number)
+                break
+    start = 0
+    while start < len(lines):
+        if not skeletons[start].strip():
+            start += 1
+            continue
+        end = start
+        while end + 1 < len(lines) and skeletons[end + 1].strip():
+            end += 1
+        if end > start:
+            offsets: list[int] = []
+            joined = ""
+            for index in range(start, end + 1):
+                offsets.append(len(joined))
+                joined += skeletons[index].strip() + " "
+
+            def line_at(pos: int, offsets: list[int] = offsets, start: int = start) -> int:
+                return start + 1 + max(i for i, off in enumerate(offsets) if off <= pos)
+
+            for pattern, why in _INJECTION_PATTERNS:
+                for match in pattern.finditer(joined):
+                    first, last = line_at(match.start()), line_at(max(match.end() - 1, match.start()))
+                    if last > first and not flagged & set(range(first, last + 1)):
+                        findings.append(
+                            Finding(rel, first, "injection", f"agent-directed text split across lines {first}-{last}: {why}", lines[first - 1])
+                        )
+                        flagged.update(range(first, last + 1))
+        start = end + 1
+    return findings
+
+
+def _bare_domain_problems(line: str, allowed: tuple[str, ...]) -> list[str]:
+    problems = []
+    for match in _BARE_DOMAIN_RE.finditer(line):
+        tld, path = match.group(2).lower(), match.group(3)
+        if tld in _STRONG_TLDS or (tld in _PATH_ONLY_TLDS and path):
+            problem = _url_problem(match.group(0).rstrip(_URL_TRAILING), allowed)
+            if problem:
+                problems.append(f"bare domain: {problem}")
+    return problems
+
+
 def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
     rel = path.relative_to(root).as_posix()
     top = rel.split("/", 1)[0]
@@ -259,7 +375,11 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
     # and U+2029, which would hide exactly the characters checked below.
     lines = [line.removesuffix("\r") for line in text.split("\n")]
     findings: list[Finding] = []
+    in_fence = False
     for number, line in enumerate(lines, start=1):
+        fence = bool(_FENCE_RE.match(line))
+        if fence:
+            in_fence = not in_fence
         hidden = _hidden_chars(line)
         if hidden:
             findings.append(
@@ -269,16 +389,22 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
             findings.append(Finding(rel, number, "comment", "HTML comment (renders as nothing; agents still read it)", line))
         elif _MD_COMMENT_RE.match(line):
             findings.append(Finding(rel, number, "comment", "Markdown link-reference comment (renders as nothing)", line))
-        if top in INSTRUCTION_DIRS:
-            for pattern, why in _INJECTION_PATTERNS:
-                if pattern.search(line):
-                    findings.append(Finding(rel, number, "injection", f"agent-directed text: {why}", line))
-                    break
+        mixed = _mixed_script_words(line)
+        if mixed:
+            findings.append(
+                Finding(rel, number, "homoglyph", "word(s) mixing Latin with Cyrillic or Greek letters: " + ", ".join(ascii(w) for w in mixed), line)
+            )
+        if top in INSTRUCTION_DIRS and not in_fence and not fence and _HTML_TAG_RE.search(_INLINE_CODE_RE.sub("", line)):
+            findings.append(Finding(rel, number, "html", "raw HTML tag outside code (can hide text or carry handlers)", line))
         if top == "practices":
             for match in _URL_RE.finditer(line):
                 problem = _url_problem(match.group(1).rstrip(_URL_TRAILING), config.url_allow)
                 if problem:
                     findings.append(Finding(rel, number, "url", problem, line))
+            for problem in _bare_domain_problems(line, config.url_allow):
+                findings.append(Finding(rel, number, "url", problem, line))
+    if top in INSTRUCTION_DIRS:
+        findings.extend(_injection_findings(rel, lines))
     if top == "practices":
         findings.extend(_shell_findings(rel, lines, config.shell_allow))
     return findings
@@ -333,7 +459,7 @@ def _assembled_rule_findings(rel: str, rule) -> list[Finding]:
     span = f"lines {rule.line}-{rule.last_line}"
     found: list[Finding] = []
     for pattern, why in _INJECTION_PATTERNS:
-        if pattern.search(joined):
+        if pattern.search(_skeleton(joined)):
             found.append(Finding(rel, rule.line, "injection", f"agent-directed text in the joined rule ({span}): {why}", joined))
             break
     if _PIPE_TO_SHELL_RE.search(joined):

@@ -506,7 +506,11 @@ class KnowledgeBase:
     def list_sources(self) -> list[dict]:
         items = []
         for path in self.source_paths():
-            text = read_kb_file(path)
+            try:
+                text = read_kb_file(path)
+            except (OSError, UnicodeDecodeError) as exc:
+                logger.warning("skipping source %s: %s: %s", path.name, type(exc).__name__, exc)
+                continue
             items.append(
                 {
                     "id": path.stem,
