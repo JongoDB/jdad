@@ -366,6 +366,10 @@ class KnowledgeBase:
         return None
 
     def _git_sha(self) -> tuple[str, bool]:
+        baked = os.environ.get("JDAD_GIT_SHA", "").strip()
+        if baked and baked != "unknown":
+            # Image builds bake the checkout SHA; prefer it over a missing .git.
+            return baked, False
         git_root = self._git_root()
         if git_root is None:
             return "unknown", False

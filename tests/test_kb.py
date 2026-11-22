@@ -87,3 +87,12 @@ def test_git_reads_use_no_optional_locks(monkeypatch: pytest.MonkeyPatch) -> Non
     assert seen
     for argv in seen:
         assert argv[:2] == ["git", "--no-optional-locks"]
+
+
+def test_version_prefers_baked_git_sha(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("JDAD_GIT_SHA", "abc123def")
+    info = KnowledgeBase(REPO_ROOT).version()
+    assert info["sha"] == "abc123def"
+    assert info["dirty"] is False
+    assert "abc123def" in info["display"]
+
