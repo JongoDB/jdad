@@ -56,11 +56,12 @@ Goal: before adding features, make the repo itself cross-tool and give the KB an
   - Acceptance: validator tests have one failing fixture per spec rule listed in the deliverables (name = directory, charset, ≤64 chars, description ≤1024 chars, body < 500 lines, unknown top-level frontmatter key); `skills-ref validate` at a pinned version (recorded in the PR) exits 0 on every catalog skill; `claude plugin validate .` exits 0. Runtime: in a temp `HOME`, `claude plugin marketplace add` + `claude plugin install` succeed and the installed manifest lists the catalog skills; without a CLI the item stays open as runtime unverified.
   - Depends on: none.
   - Evidence (2026-11-22, JON-1335): `tests/test_catalog.py` (24) has a failing fixture per spec rule; `agentskills validate` from `skills-ref==0.1.1` passes on every catalog skill in `./verify`; `claude plugin validate .` passes; in a temp `HOME`, Claude Code 2.1.330 `plugin marketplace add` + `plugin install jdad@jdad` succeed and `plugin details` lists the `jdad-performance` skill.
-- [ ] **P1.5 Skill compiler v0 (`jdad build`)**
+- [x] **P1.5 Skill compiler v0 (`jdad build`)**
   - Goal: generate each tool's files from the catalog so no one hand-edits four copies.
   - Deliverables: `jdad build` writing (a) plugin `skills/` for Claude Code (also read by Grok Build), (b) `dist/agents-skills/` for `.agents/skills/` (Codex, Cursor), (c) Cursor `.mdc` files from `catalog/rules/` (`description`, `globs`, `alwaysApply`); a generated-file header; `jdad build --check` in `./verify` fails when outputs are stale; golden-file tests per target.
   - Acceptance: changing a catalog skill without rebuilding fails `./verify`; golden tests pass; the generated Claude skill matches today's `skills/jdad-performance/SKILL.md` apart from the generated-file header (diff shown in the PR).
   - Depends on: P1.4.
+  - Evidence (2026-11-22, JON-1336): `tests/test_build.py` has golden files for all three targets (`skills/`, `generated/agents-skills/`, `generated/cursor-rules/`; outputs live in `generated/` because `uv build` ignores all of `dist/`); editing a catalog skill without rebuilding makes `jdad build --check`, and so `./verify`, fail; the generated `skills/jdad-performance/SKILL.md` equals the catalog source apart from the two-line `metadata.generated` header.
 - [x] **P1.6 Dogfood the harness in this repo**
   - Goal: JDAD runs the same guardrails it will ship.
   - Deliverables: `.claude/settings.json` with deny rules (reading `.env*`, `**/*.pem`, `**/id_*`; `rm -rf`; `git push --force`) and a `Stop` hook that runs a fast verify subset (ruff + pytest -q) and exits 2 on failure; `LESSONS.md` seeded with the lessons from PR #1's six Checker rounds; a `./verify --fast` flag.
