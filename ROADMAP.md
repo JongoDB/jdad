@@ -69,9 +69,9 @@ Goal: before adding features, make the repo itself cross-tool and give the KB an
 Goal: video or article → source → practice, with dedupe, tags and citations, done the same way every time.
 
 - [ ] **P2.1 Ingestion runbook and `jdad-ingest` skill**
-  - Deliverables: `docs/ingestion.md` (capture → transcript → `sources/` record → fold into `practices/` → dedupe → version bump → PR); `catalog/skills/jdad-ingest/` for Daisy and other agents; `/jdad add` keeps routing to Daisy.
-  - Acceptance: a dry run on one new article produces a source file and practice edits that pass `jdad lint-kb`; the runbook names the exact capture tool for video.
-  - Depends on: P1.3, P1.5. **Needs Jon:** which video transcript tool Daisy uses and where raw transcripts may live (in repo or not).
+  - Deliverables: `docs/ingestion.md` runbook (Jon's link → Daisy watches or reads it → extract tools, resources and practices → `sources/` record with the link and items → fold into `practices/` → dedupe → version bump → PR); `catalog/skills/jdad-ingest/` for Daisy and other agents; `/jdad add` keeps routing to Daisy.
+  - Acceptance: a dry run on one new article produces a source file and practice edits that pass `jdad lint-kb`; no transcript is stored anywhere.
+  - Depends on: P1.3, P1.5. Jon decided (2026-11-22): no transcript pipeline or transcripts repo; source records (link plus extracted items, with paraphrase, short quotes and timestamps) are public; Claude session transcripts and agent logs never go in the repo.
 - [ ] **P2.2 Duplicate and near-duplicate detection**
   - Deliverables: `jdad kb dupes` (offline token-overlap or TF-IDF similarity over rule text, stdlib only) listing candidate pairs above a threshold; a non-blocking report in `./verify` output.
   - Acceptance: a committed fixture file labels pairs as duplicate, paraphrase or distinct, and the PR records the cutoff θ; at θ, every exact-duplicate pair is reported, paraphrase recall ≥ 0.8, and no pair in the current KB labeled distinct is reported; the score output is in the PR.

@@ -10,7 +10,7 @@ The package and CLI are named `jdad`. The entry point is `jdad-mcp`. It serves s
 
 When Jon (or anyone) sends a video, article, or thread to mine:
 
-1. Watch or read the source yourself. Do not invent points that are not in it.
+1. Watch or read the source yourself and pull out the tools, resources and practices worth using. Do not invent points that are not in it. There is no transcript step, and full transcripts aren't stored anywhere (`docs/ingestion.md`).
 2. Create `sources/YYYY-MM-DD-<cite_as>-<slug>.md` from `sources/_TEMPLATE.md` (contract and fields: `docs/ingestion.md`):
    - Frontmatter: `title`, `author`, `url`, `format`, `posted`, `retrieved` (the file-name date), `capture` (how the content was obtained), `items`, `cite_as`.
    - What is useful and what is missing.
@@ -24,7 +24,7 @@ When Jon (or anyone) sends a video, article, or thread to mine:
    - If you add a rule that did not come from the source, label it clearly as a KB addition (see Rule zero in `practices/performance.md`).
 4. One skill per `practices/` topic file. Until the skill compiler (P1.5) lands, the skill's rule lines must equal the practice file's (`tests/test_kb_schema.py`). If you created `practices/<topic>.md`, add `skills/jdad-<topic>/SKILL.md` with a description that will auto-trigger, and put the rules (or a pointer to `get_practice`) in the body. The `/jdad` command lives in `commands/jdad.md`; do not split it into four command files.
 5. Bump the version in lockstep: `pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json`, and the plugin entry in `.claude-plugin/marketplace.json` (patch for a new source or rule, minor if you add a topic or tool). `./verify` fails if they differ.
-6. Do not put secrets, tokens, keys, or credentials anywhere in this repo. `JDAD_TOKEN` belongs in `/etc/jdad.env` on the host, not here.
+6. Do not put secrets, tokens, keys, or credentials anywhere in this repo. Do not commit Claude Code session transcripts or agent logs (session `.jsonl` files, `.claude/projects/`, `.remember/`), or anything copied from them. `JDAD_TOKEN` belongs in `/etc/jdad.env` on the host, not here.
 7. Run `uv run jdad lint-kb` (content checks; see `docs/threat-model.md`) and `uv run pytest`, and make sure the new topic or source is reachable through the MCP tools (`list_topics` / `list_sources`, a search or checklist that hits the new rules, and `kb_version` showing the new entry date when the filename is dated).
 
 `/jdad add <url>` must not write an entry. It only tells the user to send the URL to Daisy.
