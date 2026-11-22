@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "jdad"
+version = "0.1.3"
+description = "JDAD (Jon-does-agentic-dev): knowledge base + MCP server"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=2.0,<3",
+]
+
+[project.scripts]
+jdad-mcp = "jdad.server:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.9",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/jdad"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"practices" = "jdad/data/practices"
+"sources" = "jdad/data/sources"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/src",
+    "/practices",
+    "/sources",
+    "/tests",
+    "/README.md",
+    "/CLAUDE.md",
+    "/deploy",
+    "/commands",
+    "/skills",
+    "/.claude-plugin",
+    "/.mcp.json",
+]
+
+[tool.ruff]
+target-version = "py311"
+src = ["src", "tests"]

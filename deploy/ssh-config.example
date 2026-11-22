@@ -1,0 +1,8 @@
+# Pin github.com in /var/lib/jdad/.ssh/known_hosts using GitHub's published
+# host keys and a fingerprint check. Do not use ssh-keyscan or
+# StrictHostKeyChecking accept-new. See the README bootstrap order.
+Host github.com
+  HostName github.com
+  User git
+  IdentityFile /var/lib/jdad/.ssh/id_ed25519
+  IdentitiesOnly yes

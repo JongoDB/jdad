@@ -1,0 +1,16 @@
+{
+  "name": "jdad",
+  "description": "JDAD (Jon-does-agentic-dev): knowledge base, skills, and MCP server.",
+  "owner": {
+    "name": "Jon Rannabargar",
+    "url": "https://github.com/JongoDB"
+  },
+  "plugins": [
+    {
+      "name": "jdad",
+      "source": "./",
+      "description": "Jon's agentic-dev knowledge base: /jdad commands, performance skill, and the hosted MCP server.",
+      "version": "0.1.3"
+    }
+  ]
+}

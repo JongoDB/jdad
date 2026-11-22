@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "jdad": {
+      "type": "http",
+      "url": "https://jdad.example/mcp",
+      "headers": {
+        "Authorization": "Bearer ${JDAD_TOKEN}",
+        "CF-Access-Client-Id": "${JDAD_CF_CLIENT_ID}",
+        "CF-Access-Client-Secret": "${JDAD_CF_CLIENT_SECRET}"
+      }
+    }
+  }
+}

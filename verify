@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Local and CI proof for this repo: lint, tests, build, and plugin validate when present.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+echo "==> bash -n deploy scripts"
+for script in deploy/common.sh deploy/install.sh deploy/update.sh; do
+  bash -n "$script"
+done
+
+echo "==> versions agree"
+uv run python tests/check_versions.py
+
+echo "==> deploy invocation and token parsing"
+bash tests/test_deploy_invocation.sh
+
+echo "==> ruff"
+uv run ruff check src tests
+
+echo "==> pytest"
+uv run pytest
+
+echo "==> uv build"
+uv build
+
+if command -v claude >/dev/null 2>&1; then
+  echo "==> claude plugin validate"
+  claude plugin validate .
+else
+  echo "==> claude plugin validate: skipped (claude CLI not found)"
+fi
+
+echo "verify: ok"
