@@ -32,11 +32,12 @@ Legend: **Needs Jon** = needs a decision, access, or money from Jon before or du
 
 Goal: before adding features, make the repo itself cross-tool and give the KB and skills a schema that later phases build on.
 
-- [ ] **P1.1 AGENTS.md becomes the canonical instructions file**
+- [x] **P1.1 AGENTS.md becomes the canonical instructions file**
   - Goal: Codex, Cursor and Grok Build read the full repo rules, not just Claude Code. ([ADR 0004](docs/adr/0004-agents-md-canonical-instructions.md))
   - Deliverables: move the rules from `CLAUDE.md` into `AGENTS.md`; `CLAUDE.md` becomes `@AGENTS.md` plus Claude-only notes (plugin validate, `userConfig`); a test that enforces the sizes below.
   - Acceptance: `AGENTS.md` ≤ 120 lines and < 32 KiB; `CLAUDE.md` ≤ 40 lines and contains `@AGENTS.md`; every normative rule has an ID (`R-<area>-<n>`) listed in a table in `AGENTS.md`, and a test asserts each ID appears in exactly one of `AGENTS.md` or `CLAUDE.md`'s "Claude-only" section; `./verify` passes. Runtime: on one installed CLI, a discovery run lists `AGENTS.md`: either `grok inspect --json` output names it, or `codex -c log_dir=./.codex-log --ask-for-approval never "Show which instruction files are active."` run from the repo root leaves `./.codex-log/codex-tui.log` containing `AGENTS.md` (the audit method in Codex's AGENTS.md guide); without it the item stays open as runtime unverified.
   - Depends on: P0.3 (done; both PRs edit `CLAUDE.md`).
+  - Evidence (2026-11-22, JON-1332): `tests/test_instructions.py` enforces the sizes and one definition per rule ID (26 IDs; 4 Claude-only). `GROK_FOLDER_TRUST=0 grok inspect --json` (Grok 1.0.77, folder-trust gate off for that one process, nothing persisted) lists both `AGENTS.md` (6,419 bytes) and `CLAUDE.md` (946 bytes) under `projectInstructions`.
 - [ ] **P1.2 Practice schema and stable rule IDs**
   - Goal: every rule is addressable, so checklists, reviews and dedupe can cite `perf.db.n-plus-one` instead of a bullet's position.
   - Deliverables: `docs/kb-schema.md` (rule ID format, required tag, `src:` citation, optional `applies-when`, `origin: source|kb-addition`); migrate `practices/performance.md`; `jdad lint-kb` command (stdlib only) wired into `./verify`; `kb.py` parses IDs.
