@@ -21,8 +21,13 @@ _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 def resolve_kb_root(explicit: str | Path | None = None) -> Path:
     """Locate the KB root (the directory that contains practices/ and sources/).
 
-    Order: explicit argument, KB_ROOT env, walk from cwd and this file to a
-    repo checkout, then bundled package data shipped in the wheel.
+    Order: explicit argument, KB_ROOT env, the source checkout this module
+    was loaded from (``<root>/src/jdad/kb.py``), then the bundled package data
+    shipped in the wheel.
+
+    It never walks up from the current directory: a server started inside
+    another project must not serve that project's ``practices/`` and
+    ``sources/`` as Jon's KB.
     """
     if explicit is not None:
         return _require_root(Path(explicit).expanduser().resolve())
@@ -31,10 +36,9 @@ def resolve_kb_root(explicit: str | Path | None = None) -> Path:
     if env:
         return _require_root(Path(env).expanduser().resolve())
 
-    for start in (Path.cwd(), Path(__file__).resolve()):
-        for candidate in (start, *start.parents):
-            if _is_kb_root(candidate):
-                return candidate.resolve()
+    checkout = _source_checkout()
+    if checkout is not None:
+        return checkout
 
     bundled = Path(__file__).resolve().parent / "data"
     if _is_kb_root(bundled):
@@ -45,6 +49,23 @@ def resolve_kb_root(explicit: str | Path | None = None) -> Path:
         "that contains practices/ and sources/."
     )
 
+
+def _source_checkout() -> Path | None:
+    """The jdad repo this module runs from, if it runs from one (editable install).
+
+    Only the exact layout ``<root>/src/jdad/kb.py`` with ``<root>/pyproject.toml``
+    counts. An installed wheel lives under ``site-packages/jdad/``, so a venv
+    inside some other project never matches.
+    """
+    here = Path(__file__).resolve()
+    package_dir = here.parent
+    src_dir = package_dir.parent
+    root = src_dir.parent
+    if package_dir.name != "jdad" or src_dir.name != "src":
+        return None
+    if not (root / "pyproject.toml").is_file() or not _is_kb_root(root):
+        return None
+    return root
 
 
 def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:

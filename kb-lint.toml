@@ -1,0 +1,16 @@
+# Configuration for `jdad lint-kb` (src/jdad/lint.py). Keep these lists short:
+# every entry widens what KB text may contain. Changes here need the same
+# review as changes to practices/.
+
+# Hosts that practices/ may link to (subdomains included).
+url_allow = []
+
+# Commands that may appear in shell code in practices/.
+shell_allow = []
+
+# Exceptions pin the exact line by SHA-256, so editing it voids the exception:
+# [[allow]]
+# check = "injection"
+# path = "sources/<file>.md"
+# sha256 = "<sha256 of the line>"
+# reason = "<why this line is safe>"

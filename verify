@@ -25,6 +25,9 @@ bash tests/test_git_checkout.sh
 echo "==> docker image"
 bash tests/test_docker.sh
 
+echo "==> kb content lint"
+uv run --frozen jdad lint-kb
+
 echo "==> ruff"
 uv run --frozen ruff check src tests
 

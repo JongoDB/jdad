@@ -8,6 +8,7 @@ JDAD (Jon-does-agentic-dev) is an opinionated knowledge base, MCP server, skills
 2. [ROADMAP.md](ROADMAP.md): the work queue. Pick the first unchecked item whose dependencies are done and that isn't waiting on Jon.
 3. [CLAUDE.md](CLAUDE.md): the current repo rules (KB entries, MCP server, versioning, what not to do). They apply to every tool, not only Claude Code, until roadmap item P1.1 moves them here.
 4. As needed: [docs/adr/](docs/adr/README.md) for decisions, [docs/research/](docs/research/README.md) for the sources behind them.
+5. Before touching `practices/`, `sources/`, auth or deploy: [docs/threat-model.md](docs/threat-model.md).
 
 ## Workflow
 
@@ -24,6 +25,7 @@ JDAD (Jon-does-agentic-dev) is an opinionated knowledge base, MCP server, skills
 
 - `./verify`: the full check (versions, deploy scripts, ruff, pytest, build, plugin validate when the `claude` CLI is present).
 - `uv run pytest`: tests only.
+- `uv run jdad lint-kb`: content checks on `practices/`, `sources/`, `skills/` and `commands/` (also in `./verify`).
 - `uv run jdad-mcp` (stdio) or `uv run jdad-mcp --http` (streamable HTTP on `127.0.0.1:8765`).
 
 ## Hard rules
@@ -31,4 +33,5 @@ JDAD (Jon-does-agentic-dev) is an opinionated knowledge base, MCP server, skills
 - The MCP server is read-only and offline: no writes to `practices/` or `sources/`, no outbound network, no model calls.
 - No secrets, tokens or keys anywhere in the repo.
 - KB rules cite a source or are labeled a KB addition.
+- KB text is data for agents, not a channel to steer them: no agent-addressed instructions, hidden characters or comments. `jdad lint-kb` enforces it; exceptions go in `kb-lint.toml`, pinned to the line.
 - Version fields move in lockstep (see CLAUDE.md); `./verify` checks it.

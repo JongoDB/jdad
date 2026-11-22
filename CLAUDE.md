@@ -26,7 +26,7 @@ When Jon (or anyone) sends a video, article, or thread to mine:
 4. One skill per `practices/` topic file. If you created `practices/<topic>.md`, add `skills/jdad-<topic>/SKILL.md` with a description that will auto-trigger, and put the rules (or a pointer to `get_practice`) in the body. The `/jdad` command lives in `commands/jdad.md`; do not split it into four command files.
 5. Bump the version in lockstep: `pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json`, and the plugin entry in `.claude-plugin/marketplace.json` (patch for a new source or rule, minor if you add a topic or tool). `./verify` fails if they differ.
 6. Do not put secrets, tokens, keys, or credentials anywhere in this repo. `JDAD_TOKEN` belongs in `/etc/jdad.env` on the host, not here.
-7. Run `uv run pytest` and make sure the new topic or source is reachable through the MCP tools (`list_topics` / `list_sources`, a search or checklist that hits the new rules, and `kb_version` showing the new entry date when the filename is dated).
+7. Run `uv run jdad lint-kb` (content checks; see `docs/threat-model.md`) and `uv run pytest`, and make sure the new topic or source is reachable through the MCP tools (`list_topics` / `list_sources`, a search or checklist that hits the new rules, and `kb_version` showing the new entry date when the filename is dated).
 
 `/jdad add <url>` must not write an entry. It only tells the user to send the URL to Daisy.
 
