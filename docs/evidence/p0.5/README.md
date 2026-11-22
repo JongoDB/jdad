@@ -8,8 +8,8 @@ These are raw outputs for roadmap item P0.5 and [ADR 0005](../../adr/0005-hosted
 | --- | --- | --- |
 | [public-from-box.txt](public-from-box.txt) | `curl -sS -i` of `/healthz` (200) and `/mcp` with no token (401), with `server: cloudflare` and `cf-ray` | Daisy's box, over the public internet, 2:43 PM ET |
 | [droplet.txt](droplet.txt) | See the list below | On the droplet (`ssh droplet` via Jon's Mac), 2:44:36–2:44:38 PM ET |
-| `cloudflare-config-rule.png` | Cloudflare dashboard, Rules > Configuration Rules: rule "hostname matches jdad-mcp.jondevs.com", match Hostname (wildcard) `jdad-mcp.jondevs.com`, action SSL, status Active | Jon's screenshot |
-| `cloudflare-ssl-strict.png` | The same rule's SSL setting: encryption mode **Strict**, placed First | Jon's screenshot |
+| `cloudflare-config-rule.png` | Cloudflare dashboard, Rules > Configuration Rules: rule "hostname matches jdad-mcp.jondevs.com", match Hostname (wildcard) `jdad-mcp.jondevs.com`, action SSL, status Active | Jon's screenshot, sent in Daisy's Grok Bot chat 2026-11-22 2:43 PM ET (not committed; image files not exportable from chat) |
+| `cloudflare-ssl-strict.png` | The same rule's SSL setting: encryption mode **Strict**, placed First | Jon's screenshot, sent in Daisy's Grok Bot chat 2026-11-22 2:43 PM ET (not committed; image files not exportable from chat) |
 
 `droplet.txt` contains:
 - `docker ps -a`: `jdad-jdad-1` healthy on `jdad:c90178b…`, 443->8443; NetBird containers Exited (0)

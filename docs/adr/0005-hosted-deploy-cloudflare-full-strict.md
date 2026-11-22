@@ -6,7 +6,7 @@
 
 ## Context
 
-[ADR 0003](0003-stdio-plus-hosted-http-mcp.md) (Accepted) covers the server. PR #2 (merged as 2022a8a) adds the hosted deployment at `jdad-mcp.jondevs.com`, on Jon's DigitalOcean droplet, with the DNS record proxied by Cloudflare (orange cloud). Jon chose to let Cloudflare handle public TLS, to run JDAD as the only container on the droplet, and to not use a Cloudflare Tunnel. The code is on `main`, and on 2026-11-22 the deployment was proven live (roadmap P0.5; raw outputs and Jon's Cloudflare screenshots in [docs/evidence/p0.5](../evidence/p0.5/README.md)), so this ADR is Accepted.
+[ADR 0003](0003-stdio-plus-hosted-http-mcp.md) (Accepted) covers the server. PR #2 (merged as 2022a8a) adds the hosted deployment at `jdad-mcp.jondevs.com`, on Jon's DigitalOcean droplet, with the DNS record proxied by Cloudflare (orange cloud). Jon chose to let Cloudflare handle public TLS, to run JDAD as the only container on the droplet, and to not use a Cloudflare Tunnel. The code is on `main`, and on 2026-11-22 the deployment was proven live (roadmap P0.5; raw outputs and a description of Jon's Cloudflare screenshots in [docs/evidence/p0.5](../evidence/p0.5/README.md)), so this ADR is Accepted.
 
 ## Decision (as merged from PR #2, head 68d42b7, merge 2022a8a)
 
