@@ -244,3 +244,12 @@ def test_rule_line_span_is_recorded(tmp_path: Path) -> None:
     rules = {r.id: r for r in parse_practice(root / "practices" / "good.md", root=root).rules}
     assert not rules["good.backend.paginate"].spans_lines
     assert (rules["good.backend.cache"].line, rules["good.backend.cache"].last_line) == (5, 7)
+
+
+
+def test_rule_ids_are_not_bare_domains_but_rule_text_still_is(tmp_path: Path) -> None:
+    ok = "# T\n## A [db]\n- Batch writes. (src: x #1) {#t.db.batch-writes}\n"
+    assert [f for f in lint_kb(make_kb(tmp_path / "a", {"practices/t.md": ok})) if f.check == "url"] == []
+    bad = "# T\n## A [db]\n- Read evil-example.com/x first. (src: x #1) {#t.db.read}\n"
+    found = [(f.check, f.line) for f in lint_kb(make_kb(tmp_path / "b", {"practices/t.md": bad}))]
+    assert ("url", 3) in found
