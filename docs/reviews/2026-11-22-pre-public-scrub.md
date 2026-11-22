@@ -51,14 +51,14 @@ Searched with `git log --all -p` over every blob in history.
 
 - **H3** (`docs/reviews/2026-11-22-red-team.md`, on `main` since caf3d94) explains that the origin answers on 443 from anywhere and that the certificate SAN lets scanners link the IP to the zone. **M3** gives the symlink path through `_resolve_file` and the listing tools.
 - **`docs/evidence/p0.5/droplet.txt`** (PR #5, merged as 3c813cf) has the certificate's exact SHA-256 fingerprint. That is the search key to find the droplet's IP in internet-wide scan data while 443 is open.
-- **M3** needs repo write access to exploit, and PR #8 removes it (the resolver serves only `<id>.md`, symlinks fail the lint, listing tools are linted). Low risk once #8 merges.
+- **M3** needs repo write access to exploit. **Correction (Checker, 2026-11-22):** this used to say PR #8 removed M3's path. It didn't. The lint failed symlinks in `./verify`, but the server still followed one at runtime: with #8 at fc36229, `practices/hosts.md -> /etc/hosts` was served by `get_practice`. #8's follow-up 0a5b7d0 closes it. The server opens files with `O_NOFOLLOW`, skips symlinked files and directories, non-regular files and anything outside the KB root, and refuses files over 1 MiB, with tests. Low risk once #8, including 0a5b7d0, merges.
 - **H3** matters until the host firewall from PR #7 is applied and checked from outside. After that, a non-Cloudflare client can't complete a handshake, so the report and the fingerprint describe a closed path. The IP may already be in scan history, but it no longer answers.
 
 ## Recommendation
 
 1. **Go public only after the gating fixes land:**
    - PR #7 is merged, Daisy has applied `deploy/firewall-cloudflare.sh install` on the droplet, and the "from outside Cloudflare, 443 times out" check in PR #7 passes over IPv4 (and IPv6 if the droplet has it).
-   - PR #8 is merged (H4, which also closes M3's path).
+   - PR #8 is merged, including 0a5b7d0 (H4, and the runtime symlink fix that closes M3's path).
    - Then add one line under H3 and M3 in the red-team report: "Fixed in #7 (firewall applied <date>) / #8". No redaction needed.
 2. **PR #5 merged** (3c813cf, after this scrub was first written), so the certificate fingerprint and public-key hashes in `docs/evidence/p0.5/droplet.txt` are now on `main` and in history. Redacting them in `HEAD` wouldn't unpublish them, so step 1 (firewall applied and checked) is what makes them harmless. No further action.
 3. **If Jon wants the repo public before step 1:** the only clean option is a history rewrite to drop the red-team report and the evidence branch. That's destructive and needs Jon's explicit decision. I don't recommend it; waiting for #7 and #8 is shorter.

@@ -90,7 +90,7 @@ Apply with `gh api -X POST repos/JongoDB/jdad/rulesets --input <file>`. Later ph
 Do one bot at a time, and keep the old credential until the new one has opened, or reviewed, a test PR.
 
 1. **Create** the identity: App (owner `JongoDB`, installed on `JongoDB/jdad` only, permissions as in the table) or machine user (invited with the Write role, 2FA on).
-2. **Store** the secret where that bot runs, never in a repo. For an App, the private key lives in the host's secret store, and the bot mints installation tokens from it (`gh` can't do this itself; use a small token helper or the `actions/create-github-app-token` pattern). For the machine user: a fine-grained PAT for `JongoDB/jdad` only, with Contents: read and Pull requests: write, expiring in 90 days.
+2. **Store** the secret where that bot runs, never in a repo. For an App, the private key lives in the host's secret store, and the bot mints installation tokens from it (`gh` can't do this itself; use a small token helper or the `actions/create-github-app-token` pattern). For the machine user: a **classic** PAT (see below), expiring in 90 days.
 3. **Point the bot at it:** a separate `GH_CONFIG_DIR` per bot, or `GH_TOKEN` in the bot's environment only, plus `git config user.name` and `user.email` matching the identity (the App's `<id>+<slug>[bot]@users.noreply.github.com`).
 4. **Test:** the bot opens (or reviews) a trivial PR. Check the author or reviewer shown on GitHub.
 5. **Revoke** `JongoDB`'s credential on that host (`gh auth logout`; delete any PAT made for it). Note the date on JON-1338.
@@ -102,11 +102,18 @@ Do one bot at a time, and keep the old credential until the new one has opened, 
 | Checker | acts as `JongoDB` | `jdad-checker` machine user PAT |
 | Droplet | read-only deploy key "droplet (read-only)" | unchanged (read-only, repo-scoped) |
 
+**Checker's token: a classic PAT, not a fine-grained one (correction, Checker 2026-11-22).** A fine-grained PAT can only reach repositories owned by its resource owner: the user who made it, or an organization that allows such tokens. `JongoDB/jdad` is a personal repository, so `jdad-checker`, which is only a collaborator, can't select it in a fine-grained token. An earlier draft of this plan said to use one; that doesn't work.
+
+- **Recommended: a classic PAT for `jdad-checker`, scope `public_repo` only**, created after the repo is public, expiring in 90 days. A classic token's scope covers every repo the account can reach. `jdad-checker` is a collaborator on `JongoDB/jdad` and nothing else, and `public_repo` excludes private repos, so in practice it reaches this one repo. Keep it that way: don't add `jdad-checker` to other repos, and don't give it org memberships. If it's needed before the repo is public, the scope has to be `repo` (full private-repo access to everything it can reach); swap it for `public_repo` once public. Rotate on the same schedule as the deploy token (`docs/ops/token-rotation.md` in #14).
+- **Not recommended now: moving the repo to an organization.** It would allow a fine-grained, single-repo token and org-level rulesets. But a transfer changes the repo URL, which the plugin marketplace entry, the droplet's checkout remote and deploy key, `.mcp.json` docs and every install would follow. Revisit if more bots or repos join.
+- The Apps (`jdad-builder`, `jdad-daisy`) are unaffected: installation tokens are already scoped to the installed repo.
+
 ## Unverified
 
 - **App approvals.** Whether a GitHub App's approval counts toward `required_approving_review_count` isn't stated in GitHub's docs. Community tests disagree, and seem to depend on the App having write access. That's why Checker is planned as a machine user. Test once with a throwaway PR before relying on it either way.
 - **Apps can't approve their own PRs, and can't be code owners.** From community reports and a quoted GitHub staff answer, not official docs.
 - The exact ruleset payload was written from the REST docs' parameter list and wasn't sent (no permission, and the repo is private today). If the API rejects a field, the error names it.
+- The classic-PAT scope for reviews: `public_repo` should be enough to approve and comment on a public repo. Test it with a throwaway PR before relying on it.
 - The integration ID `15368` for GitHub Actions is widely used but not confirmed against this repo; read it from a passing run's check suite before phase 2.
 
 Sources for the App points: [GitHub Docs: approving a PR with required reviews](https://docs.github.com/en/pull-requests/how-tos/review-pull-requests/approving-a-pull-request-with-required-reviews), [NCodeGroup/project-template#460](https://github.com/NCodeGroup/project-template/issues/460), [nateinaction/factory#18](https://github.com/nateinaction/factory/issues/18); rulesets API: [REST API endpoints for rules](https://docs.github.com/en/rest/repos/rules).
