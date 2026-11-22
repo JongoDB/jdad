@@ -23,8 +23,10 @@ writing and lists every stale, missing or extra file. Stdlib only.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -109,6 +111,16 @@ def _rule_file(meta: dict, body: str, source: str) -> str:
     return f"---\n{dump_frontmatter(out)}\n---\n> {_header(source)}\n\n{body.lstrip(chr(10))}"
 
 
+def _no_symlinks(root: Path, rel: Path) -> None:
+    """Refuse a path with any symlinked component below the repo root, so
+    the build never reads from or writes through a link."""
+    current = root
+    for part in rel.parts:
+        current = current / part
+        if current.is_symlink():
+            raise BuildError(f"{current.relative_to(root).as_posix()} is a symlink; the catalog and its outputs must be real files")
+
+
 @dataclass(frozen=True)
 class Output:
     path: Path  # relative to the repo root
@@ -122,7 +134,14 @@ def plan(root: Path) -> list[Output]:
         raise BuildError("catalog is invalid:\n" + "\n".join(f.format() for f in findings))
     outputs: list[Output] = []
     skills = root / "catalog" / "skills"
-    for directory in sorted(p for p in skills.iterdir() if p.is_dir()) if skills.is_dir() else []:
+    for base in (Path("catalog"), Path("catalog/skills"), Path("catalog/rules")):
+        if (root / base).exists():
+            _no_symlinks(root, base)
+    for directory in sorted(p for p in skills.iterdir() if p.is_dir() or p.is_symlink()) if skills.is_dir() else []:
+        _no_symlinks(root, directory.relative_to(root))
+        for item in directory.rglob("*"):
+            if item.is_symlink():
+                raise BuildError(f"{item.relative_to(root).as_posix()} is a symlink; the catalog and its outputs must be real files")
         source = f"catalog/skills/{directory.name}/SKILL.md"
         meta_text, body = split_frontmatter((directory / "SKILL.md").read_text(encoding="utf-8"))
         meta = parse_frontmatter(meta_text)
@@ -134,6 +153,7 @@ def plan(root: Path) -> list[Output]:
     for rule in sorted(rules.glob("*.md")) if rules.is_dir() else []:
         if rule.name == "README.md":
             continue
+        _no_symlinks(root, rule.relative_to(root))
         meta_text, body = split_frontmatter(rule.read_text(encoding="utf-8"))
         outputs.append(
             Output(CURSOR_DIR / f"{rule.stem}.mdc", _rule_file(parse_frontmatter(meta_text), body, f"catalog/rules/{rule.name}").encode())
@@ -144,9 +164,15 @@ def plan(root: Path) -> list[Output]:
 def _existing(root: Path) -> set[Path]:
     found: set[Path] = set()
     for base in OUTPUT_ROOTS:
+        if (root / base).exists() or (root / base).is_symlink():
+            _no_symlinks(root, base)
         directory = root / base
         if directory.is_dir():
-            found |= {p.relative_to(root) for p in directory.rglob("*") if p.is_file() and p.name != ".DS_Store"}
+            for p in directory.rglob("*"):
+                if p.is_symlink():
+                    raise BuildError(f"{p.relative_to(root).as_posix()} is a symlink; the catalog and its outputs must be real files")
+                if p.is_file() and p.name != ".DS_Store":
+                    found.add(p.relative_to(root))
     return found
 
 
@@ -154,6 +180,7 @@ def check(root: Path) -> list[str]:
     """Problems that `jdad build` would fix; empty when everything is current."""
     root = root.resolve()
     outputs = plan(root)
+    existing = _existing(root)  # raises on a symlinked output path
     problems = []
     for output in outputs:
         path = root / output.path
@@ -162,7 +189,7 @@ def check(root: Path) -> list[str]:
         elif path.read_bytes() != output.data:
             problems.append(f"stale: {output.path.as_posix()}")
     expected = {o.path for o in outputs}
-    for extra in sorted(_existing(root) - expected):
+    for extra in sorted(existing - expected):
         problems.append(f"not generated from the catalog: {extra.as_posix()}")
     return problems
 
@@ -178,9 +205,17 @@ def build(root: Path) -> list[str]:
         changed.append(f"removed {extra.as_posix()}")
     for output in outputs:
         path = root / output.path
+        _no_symlinks(root, output.path)
         if not path.is_file() or path.read_bytes() != output.data:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(output.data)
+            _no_symlinks(root, output.path.parent)
+            # Write a temp file beside it and rename over: a rename never
+            # follows a link at the destination.
+            fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".jdad-build-")
+            with os.fdopen(fd, "wb") as handle:
+                handle.write(output.data)
+            os.chmod(tmp, 0o644)  # mkstemp makes 0600
+            os.replace(tmp, path)
             changed.append(f"wrote {output.path.as_posix()}")
     for base in OUTPUT_ROOTS:  # drop directories emptied above
         directory = root / base

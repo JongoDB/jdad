@@ -116,3 +116,39 @@ def test_generated_claude_skill_is_the_catalog_skill_plus_the_header() -> None:
     header = "metadata:\n  generated: jdad build from catalog/skills/jdad-performance/SKILL.md; do not edit\n"
     assert header in generated
     assert generated.replace(header, "", 1) == source
+
+
+def test_symlink_in_the_catalog_refuses_to_build(work: Path, tmp_path_factory: pytest.TempPathFactory) -> None:
+    secret = tmp_path_factory.mktemp("outside") / "secret.txt"
+    secret.write_text("not for the plugin\n")
+    (work / "catalog/skills/demo-skill/references/leak.md").symlink_to(secret)
+    with pytest.raises(BuildError, match="symlink"):
+        build(work)
+    assert not (work / "skills").exists()
+
+
+def test_symlinked_output_directory_is_never_written_through(work: Path, tmp_path_factory: pytest.TempPathFactory) -> None:
+    outside = tmp_path_factory.mktemp("outside")
+    (work / "skills").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(BuildError, match="symlink"):
+        build(work)
+    with pytest.raises(BuildError, match="symlink"):
+        check(work)
+    assert list(outside.iterdir()) == []
+
+
+def test_symlinked_output_file_is_replaced_not_followed(work: Path, tmp_path_factory: pytest.TempPathFactory) -> None:
+    build(work)
+    target = tmp_path_factory.mktemp("outside") / "victim.md"
+    target.write_text("keep me\n")
+    out = work / "skills/demo-skill/SKILL.md"
+    out.unlink()
+    out.symlink_to(target)
+    with pytest.raises(BuildError, match="symlink"):
+        build(work)
+    assert target.read_text() == "keep me\n"
+
+
+def test_outputs_are_world_readable(work: Path) -> None:
+    build(work)
+    assert (work / "skills/demo-skill/SKILL.md").stat().st_mode & 0o777 == 0o644
