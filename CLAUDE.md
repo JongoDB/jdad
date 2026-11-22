@@ -1,5 +1,7 @@
 # Working in this repository
 
+Start with @AGENTS.md: it sets the reading order (docs/VISION.md, then ROADMAP.md, then this file) and the workflow (one roadmap item per session, plan on the Linear card first, `./verify`, PR for Checker review). The rules below apply to every agent until roadmap item P1.1 moves them into AGENTS.md.
+
 This repo is JDAD (Jon-does-agentic-dev), Jon's agentic coding knowledge base. The MCP server in `src/jdad/` is how other coding agents (Claude Code, Codex, cursor-agent) read it. It is read-only at runtime: never add a tool, resource, or code path that writes to `practices/` or `sources/`.
 
 The package and CLI are named `jdad`. The entry point is `jdad-mcp`. It serves stdio by default and streamable HTTP with `jdad-mcp --http` (default bind `127.0.0.1:8765`). A non-loopback bind without `JDAD_TOKEN` is refused unless `--allow-no-auth` is passed.
