@@ -17,6 +17,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# This script later points HOME at a scratch directory. Docker finds its CLI
+# plugins (compose, on OrbStack and Docker Desktop) and the active context
+# through ~/.docker, so pin DOCKER_CONFIG to the real one first; otherwise
+# `docker compose` vanishes ("unknown shorthand flag: 'f' in -f").
+export DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}"
+
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
   echo "skip docker image tests: docker is not available on this box"
   exit 0
