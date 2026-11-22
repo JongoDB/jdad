@@ -139,7 +139,7 @@ _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _HTML_COMMENT_RE = re.compile(r"<!--")
 # A tag name right after "<" (browsers treat "< b" as text). "<https://x>"
 # autolinks don't match: the name must be followed by space, "/" or ">".
-_HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])")
+_HTML_TAG_RE = re.compile(r"</?[A-Za-z][^\s/>]*(?=[\s/>]|$)")
 # Flagged anywhere, inside code spans and fences too, because this lint's
 # idea of "code" can differ from a renderer's (escaped backticks, fences
 # with odd info strings): a tag with an attribute, or a real HTML element.
@@ -148,7 +148,11 @@ _HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])")
 # can continue on the next line, so a tag name at the end of a line counts.
 # Shaped like the HTML tokenizer: after the tag name, whitespace or "/"
 # then anything but ">" starts an attribute (whatever its first character).
-_HTML_ATTR_TAG_RE = re.compile(r"<[A-Za-z][A-Za-z0-9-]*(?:[\s/]+[^\s/>]|[\s/]*$)")
+# CommonMark autolinks (<https://x>, <a@b.example>) render as links, not
+# HTML; they're removed before the tag checks (the url check still sees them).
+_AUTOLINK_RE = re.compile(r"<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+)>")
+# Tag names, like the tokenizer's, run to the first space, "/" or ">".
+_HTML_ATTR_TAG_RE = re.compile(r"<[A-Za-z][^\s/>]*(?:[\s/]+[^\s/>]|[\s/]*$)")
 _HTML_ELEMENT_RE = re.compile(
     r"</?(a|abbr|audio|b|base|bdo|blink|br|button|canvas|code|del|details|dialog|div|em|embed|"
     r"font|form|frame|frameset|i|iframe|img|input|ins|label|link|mark|marquee|math|meta|"
@@ -480,10 +484,11 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
         if lookalikes:
             what = "non-ASCII letters in a practice" if top == "practices" else "lookalike letters"
             findings.append(Finding(rel, number, "homoglyph", f"{what}: " + ", ".join(ascii(w) for w in lookalikes), line))
+        no_links = _AUTOLINK_RE.sub("", line)
         if top in INSTRUCTION_DIRS and (
-            _HTML_ATTR_TAG_RE.search(line)
-            or _HTML_ELEMENT_RE.search(line)
-            or (not in_fence and not fence and _HTML_TAG_RE.search(_INLINE_CODE_RE.sub("", line)))
+            _HTML_ATTR_TAG_RE.search(no_links)
+            or _HTML_ELEMENT_RE.search(no_links)
+            or (not in_fence and not fence and _HTML_TAG_RE.search(_INLINE_CODE_RE.sub("", no_links)))
         ):
             findings.append(Finding(rel, number, "html", "raw HTML tag outside code (can hide text or carry handlers)", line))
         if top == "practices":
@@ -499,6 +504,10 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
                 checked = line[: tail.start()]
             for problem in _bare_domain_problems(checked, config.url_allow):
                 findings.append(Finding(rel, number, "url", problem, line))
+            for link in _AUTOLINK_RE.finditer(line):
+                scheme = link.group(0)[1:].split(":", 1)[0].lower() if ":" in link.group(0) else ""
+                if scheme and scheme not in ("http", "https"):
+                    findings.append(Finding(rel, number, "url", f"autolink with scheme '{scheme}:' (only http and https)", line))
     if top in INSTRUCTION_DIRS:
         findings.extend(_injection_findings(rel, lines))
     if top == "practices":
