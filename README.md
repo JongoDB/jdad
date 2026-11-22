@@ -39,7 +39,7 @@ The official Python MCP SDK v2 renamed `FastMCP` to `MCPServer`. This server use
 3. If you add a new topic file under `practices/`, add a matching skill at `skills/jdad-<topic>/SKILL.md` (one skill per practice file). If you add a rule that did not come from the source, label it as a KB addition, the way Rule zero is labeled in `practices/performance.md`.
 4. Bump the patch (or minor) version in lockstep (`pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json`, and the marketplace plugin entry). `./verify` fails if they differ.
 5. Do not put secrets, tokens, or credentials in this repo.
-6. Run `uv run jdad lint-kb`. It fails on text addressed to an agent, URLs or shell commands in `practices/` that aren't allowlisted in `kb-lint.toml`, hidden or bidi Unicode, HTML or Markdown comments, and symlinks. See [docs/threat-model.md](docs/threat-model.md).
+6. Run `uv run jdad lint-kb`. It fails on text addressed to an agent, URLs or shell commands in `practices/` that aren't allowlisted in `kb-lint.toml`, hidden or bidi Unicode, HTML or Markdown comments, symlinks, and non-`.md` files in `practices/` or `sources/`. See [docs/threat-model.md](docs/threat-model.md).
 
 See [CLAUDE.md](CLAUDE.md) for the same instructions aimed at agents working in this repo.
 

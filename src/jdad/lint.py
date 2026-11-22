@@ -17,6 +17,7 @@ content that tries to steer an agent rather than inform it:
   render as nothing but are read by agents.
 - ``symlink``: a symlink anywhere in the KB trees.
 - ``encoding``: a file that isn't valid UTF-8.
+- ``file-type``: a file in practices/ or sources/ that isn't ``.md``.
 
 The last four run on practices/, sources/, skills/ and commands/.
 
@@ -42,6 +43,7 @@ import tomllib
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 INSTRUCTION_DIRS = ("practices", "sources")
 ALL_DIRS = ("practices", "sources", "skills", "commands")
@@ -74,7 +76,9 @@ _INJECTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
     )
 )
 
-_URL_RE = re.compile(r"\b(?:https?://|www\.)([^\s/)>\]'\"`]+)", re.IGNORECASE)
+# The whole URL token; the host is taken with urlsplit, never by hand, so
+# userinfo, '#', '?' and '\\' tricks can't make one host look like another.
+_URL_RE = re.compile(r"\b(?:https?://|www\.)[^\s<>()\[\]'\"`]*", re.IGNORECASE)
 _PIPE_TO_SHELL_RE = re.compile(
     r"\b(curl|wget|fetch|iwr|invoke-webrequest)\b[^\n|]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b|\|\s*(iex|invoke-expression)\b",
     re.IGNORECASE,
@@ -91,7 +95,10 @@ _SHELL_LANGS = frozenset({"sh", "bash", "zsh", "shell", "console", "shell-sessio
 _INLINE_CODE_RE = re.compile(r"`([^`\n]+)`")
 _HTML_COMMENT_RE = re.compile(r"<!--")
 _MD_COMMENT_RE = re.compile(r"^\s*\[[^\]]*\]:\s*(#|<>)")
-_ALLOWED_CONTROLS = {"\t", "\n", "\r"}
+# Lines are split on "\n" only (a trailing "\r" is dropped first), so every
+# other separator and control character reaches the hidden-character check.
+_ALLOWED_CONTROLS = {"\t"}
+_HIDDEN_CATEGORIES = {"Cf", "Co", "Cs", "Cc", "Zl", "Zp"}
 
 
 @dataclass(frozen=True)
@@ -138,9 +145,21 @@ class LintConfig:
         return (finding.check, finding.path, digest) in self.allow
 
 
-def _host_allowed(host: str, allowed: tuple[str, ...]) -> bool:
-    host = host.lower().split("@")[-1].split(":")[0].rstrip(".")
-    return any(host == entry or host.endswith("." + entry) for entry in allowed)
+def _url_problem(url: str, allowed: tuple[str, ...]) -> str | None:
+    """Why this URL isn't allowed in practices/, or None if its host is allowlisted."""
+    if "\\" in url:
+        return f"URL '{url}' contains a backslash (clients disagree on where its host ends)"
+    candidate = url if "://" in url else "https://" + url
+    try:
+        host = urlsplit(candidate).hostname
+    except ValueError:
+        return f"URL '{url}' can't be parsed"
+    if not host:
+        return f"URL '{url}' has no host"
+    host = host.rstrip(".")
+    if any(host == entry or host.endswith("." + entry) for entry in allowed):
+        return None
+    return f"URL host '{host}' is not in url_allow ({CONFIG_NAME})"
 
 
 def _describe_char(ch: str) -> str:
@@ -154,7 +173,7 @@ def _hidden_chars(line: str) -> list[str]:
         if ch in _ALLOWED_CONTROLS:
             continue
         category = unicodedata.category(ch)
-        if category in {"Cf", "Co", "Cs", "Cc"} or ch == "\u00ad":
+        if category in _HIDDEN_CATEGORIES or ch == "\u00ad":
             found.append(_describe_char(ch))
     return found
 
@@ -207,7 +226,9 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
         text = path.read_bytes().decode("utf-8")
     except UnicodeDecodeError as exc:
         return [Finding(rel, 1, "encoding", f"not valid UTF-8 ({exc.reason} at byte {exc.start})")]
-    lines = text.splitlines()
+    # Not splitlines(): it also splits on \x0b, \x0c, \x1c-\x1e, \x85, U+2028
+    # and U+2029, which would hide exactly the characters checked below.
+    lines = [line.removesuffix("\r") for line in text.split("\n")]
     findings: list[Finding] = []
     for number, line in enumerate(lines, start=1):
         hidden = _hidden_chars(line)
@@ -226,11 +247,9 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
                     break
         if top == "practices":
             for match in _URL_RE.finditer(line):
-                host = match.group(1)
-                if not _host_allowed(host, config.url_allow):
-                    findings.append(
-                        Finding(rel, number, "url", f"URL host '{host}' is not in url_allow ({CONFIG_NAME})", line)
-                    )
+                problem = _url_problem(match.group(0).rstrip(".,;:!"), config.url_allow)
+                if problem:
+                    findings.append(Finding(rel, number, "url", problem, line))
     if top == "practices":
         findings.extend(_shell_findings(rel, lines, config.shell_allow))
     return findings
@@ -253,6 +272,12 @@ def lint_kb(root: Path) -> list[Finding]:
             if path.is_symlink():
                 findings.append(Finding(rel, 1, "symlink", "symlinks are not allowed in the KB"))
                 continue
-            if path.is_file() and path.suffix.lower() == ".md":
+            if not path.is_file():
+                continue
+            if path.name.endswith(".md"):
                 findings.extend(lint_file(root, path, config))
+            elif name in INSTRUCTION_DIRS:
+                # The server only serves <name>.md here; anything else would be
+                # unlinted content one resolver change away from agents.
+                findings.append(Finding(rel, 1, "file-type", "only .md files belong in practices/ and sources/"))
     return [f for f in findings if not config.allows(f)]

@@ -411,10 +411,10 @@ class KnowledgeBase:
         if not stem or stem in {".", ".."}:
             raise FileNotFoundError(f"Invalid {kind} id {needle!r}")
 
-        for candidate in (directory / f"{stem}.md", directory / name):
-            resolved = candidate.resolve()
-            if resolved.is_file() and resolved.parent == directory:
-                return resolved
+        # Only <stem>.md: the same set of files list_* returns and `jdad lint-kb` checks.
+        resolved = (directory / f"{stem}.md").resolve()
+        if resolved.is_file() and resolved.parent == directory:
+            return resolved
 
         matches = sorted(
             path
