@@ -431,7 +431,9 @@ def _simple_reason(raw_words: list[str], depth: int, piped: bool = False) -> str
     program = PurePath(words[0]).name
     args = words[1:]
     for inner in _nested_commands(program, args):
-        reason = bash_reason(inner, depth + 1)
+        # sh -c / eval / find -exec code whose output is piped or consumed
+        # gets no lister exemption either.
+        reason = bash_reason(inner, depth + 1, consumed=piped)
         if reason:
             return reason
     reason = _rm_reason(args) if program == "rm" else None

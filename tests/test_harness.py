@@ -177,6 +177,8 @@ def test_guard_allows(event: dict) -> None:
         bash("echo a\\ # ; rm -rf build"),  # "#" after an escaped space isn't a comment
         bash("cat <<\"E\\OF\"\nEOF\nrm -rf build\nE\\OF"),  # backslash in a quoted delimiter: deny
         bash("cat $(ls *.pem)"),  # a lister inside a substitution: its output is used
+        bash("sh -c 'ls *.pem' | xargs cat"),  # nested lister whose output is piped on
+        bash("cat $(eval 'ls *.pem')"),
         bash("cat .e*"),
         bash("cat *.pem"),
         bash("cp ~/.ssh/id_* /tmp"),
