@@ -161,7 +161,17 @@ _BARE_DOMAIN_RE = re.compile(
     r"(?<![\w@./:%-])(?!www\.)((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,24}))(/\S*)?",
     re.IGNORECASE,
 )
-_RULE_ID_TAIL_RE = re.compile(r"\s*\{#[a-z0-9][a-z0-9.-]*\}\s*$")
+_RULE_ID_TAIL_RE = re.compile(r"\s*\{#([a-z0-9][a-z0-9.-]*)\}\s*$")
+# A rule ID must not end like a hostname (perf.evil.com), since the ID is
+# exempt from the bare-domain check on its own rule line.
+_TLD_LIKE = frozenset(
+    {
+        "com", "net", "org", "io", "dev", "app", "co", "ai", "xyz", "info", "biz", "me", "ly", "gg",
+        "cc", "tk", "ru", "cn", "top", "site", "online", "link", "click", "live", "store", "tech",
+        "cloud", "page", "run", "pro", "us", "uk", "de", "fr", "eu", "ca", "au", "tv", "ws", "su",
+        "pw", "icu", "shop", "work", "zone", "agency", "sh", "to", "is", "so", "in", "it", "at",
+    }
+)
 _FILE_EXTENSIONS = frozenset(
     {
         "md", "markdown", "txt", "rst", "toml", "yaml", "yml", "json", "jsonc", "lock", "cfg", "ini",
@@ -439,6 +449,17 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
     # and U+2029, which would hide exactly the characters checked below.
     lines = [line.removesuffix("\r") for line in text.split("\n")]
     findings: list[Finding] = []
+    # Lines on which a parsed rule's own {#id} may be stripped before the
+    # bare-domain check: only lines inside that rule, only that exact ID.
+    rule_id_lines: dict[int, str] = {}
+    if top == "practices" and rel.count("/") == 1:
+        try:
+            for rule in parse_practice(path, root=root).rules:
+                if rule.id:
+                    for number in range(rule.line, max(rule.last_line, rule.line) + 1):
+                        rule_id_lines[number] = rule.id
+        except (OSError, UnicodeDecodeError, ValueError):
+            pass
     in_fence = False
     for number, line in enumerate(lines, start=1):
         fence = bool(_FENCE_RE.match(line))
@@ -470,7 +491,11 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
                     findings.append(Finding(rel, number, "url", problem, line))
             # A rule's trailing {#perf.db.n-plus-one} ID (docs/kb-schema.md) is
             # dotted like a domain; the rule-id check validates it instead.
-            for problem in _bare_domain_problems(_RULE_ID_TAIL_RE.sub("", line), config.url_allow):
+            checked = line
+            tail = _RULE_ID_TAIL_RE.search(line)
+            if tail and rule_id_lines.get(number) == tail.group(1):
+                checked = line[: tail.start()]
+            for problem in _bare_domain_problems(checked, config.url_allow):
                 findings.append(Finding(rel, number, "url", problem, line))
     if top in INSTRUCTION_DIRS:
         findings.extend(_injection_findings(rel, lines))
@@ -587,6 +612,10 @@ def _structure_findings(root: Path) -> list[Finding]:
                         Finding(rel, rule.line, "rule-id", f"malformed rule ID '{rule.id}' (lowercase segments joined by dots)", text)
                     )
                     continue
+                if rule.id.rsplit(".", 1)[-1] in _TLD_LIKE:
+                    findings.append(
+                        Finding(rel, rule.line, "rule-id", f"rule ID '{rule.id}' ends like a hostname; rename its last segment", text)
+                    )
                 if rule.id in seen_ids:
                     findings.append(Finding(rel, rule.line, "rule-id", f"duplicate rule ID '{rule.id}' (also at {seen_ids[rule.id]})", text))
                 else:

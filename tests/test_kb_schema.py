@@ -236,3 +236,22 @@ def test_rule_ids_are_not_bare_domains_but_rule_text_still_is(tmp_path: Path) ->
     bad = "# T\n## A [db]\n- Read evil-example.com/x first. (src: x #1) {#t.db.read}\n"
     found = [(f.check, f.line) for f in lint_kb(make_kb(tmp_path / "b", {"practices/t.md": bad}))]
     assert ("url", 3) in found
+
+
+
+@pytest.mark.parametrize(
+    ("label", "text", "check", "line"),
+    [
+        ("id tail on a heading", "# T\n## A [db] {#evil-example.com}\n- R. (src: x #1) {#t.a.r}\n", "url", 2),
+        ("id tail on prose in the preamble", "# T\nSee notes {#evil-example.com}\n## A [db]\n- R. (src: x #1) {#t.a.r}\n", "url", 2),
+        ("id tail inside a fence", "# T\n## A [db]\n- R. (src: x #1) {#t.a.r}\n```\nx {#evil-example.com}\n```\n", "url", 5),
+        # The parser takes the last {#...} as the ID, so it must pass the hostname check.
+        ("a second id tail", "# T\n## A [db]\n- R. (src: x #1) {#t.a.r} {#evil-example.com}\n", "rule-id", 3),
+        ("hostname-like id", "# T\n## A [db]\n- R. (src: x #1) {#t.evil.com}\n", "rule-id", 3),
+    ],
+)
+def test_only_a_rules_own_id_is_exempt_from_the_domain_check(
+    tmp_path: Path, label: str, text: str, check: str, line: int
+) -> None:
+    found = [(f.check, f.line) for f in lint_kb(make_kb(tmp_path, {"practices/t.md": text}))]
+    assert (check, line) in found, f"{label}: {found}"
