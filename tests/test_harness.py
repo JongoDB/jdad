@@ -94,9 +94,12 @@ def test_settings_hooks_point_at_executable_scripts() -> None:
         bash("git commit --message='mention x.pem'"),
         bash('gh pr comment 1 --body "the guard denies .env reads" --title "id_rsa note"'),
         bash('echo "never read .env"'),
+        bash("ls *"),
+        bash("cat *.md"),
+        bash("bash -lc 'uv run pytest'"),
     ],
     ids=["readme", "abs-src", "env-example-name", "pytest", "normal-push", "rm-file", "rm-r", "heredoc-body",
-         "commit-message", "commit-message-eq", "gh-body", "echo-text"],
+         "commit-message", "commit-message-eq", "gh-body", "echo-text", "ls-star", "cat-md-glob", "bash-lc-ok"],
 )
 def test_guard_allows(event: dict) -> None:
     assert decision(event) == "allow"
@@ -136,6 +139,20 @@ def test_guard_allows(event: dict) -> None:
         bash("echo TOKEN=x > .env"),
         bash("printf x >> deploy/key.pem"),
         bash('git commit -m "msg" -- id_ed25519'),
+        # automated security review of 390dcbac / 4d7b343
+        bash("cat <<EOF; cat .env\nbody\nEOF"),  # rest of the heredoc's opening line
+        bash('echo "<<EOF"\ncat .env\nEOF'),  # "<<" inside quotes isn't a heredoc
+        bash("cat <<EOF\nrm -rf build"),  # no closing delimiter: nothing is stripped
+        bash('git commit -m "$(cat .env)"'),  # substitution in a skipped message
+        bash("echo `rm -rf build`"),
+        bash('gh pr comment 1 --body "$(cat ~/.ssh/id_ed25519)"'),
+        bash("bash -lc 'rm -rf build'"),
+        bash("sh -ec 'git push -f'"),
+        bash("eval 'rm -rf build'"),
+        bash("sh -c \"sh -c 'sh -c \\\"sh -c ls\\\"'\""),  # past the depth limit: deny
+        bash("cat .e*"),
+        bash("cat *.pem"),
+        bash("cp ~/.ssh/id_* /tmp"),
     ],
     ids=lambda e: (e["tool_input"].get("command") or e["tool_input"].get("file_path") or e["tool_name"])[:40],
 )

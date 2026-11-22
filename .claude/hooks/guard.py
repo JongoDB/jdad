@@ -39,7 +39,44 @@ SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 # Heredoc bodies are data (a script or a document), not arguments: drop them
 # before looking for secret-shaped words. A script that opens a file itself
 # is out of reach of any command-text check (the sandbox is the control).
-HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n.*?(?:\n\2[ \t]*(?=\n|$)|\Z)", re.DOTALL)
+HEREDOC_OPEN = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
+# Programs that only list names; a glob argument to them reads nothing.
+LISTERS = {"ls", "find", "echo", "printf", "stat", "du", "tree"}
+EXAMPLE_SECRETS = (".env", ".env.local", "x.pem", "id_ed25519")
+MAX_DEPTH = 3
+
+
+def _strip_heredoc_bodies(command: str) -> str:
+    """Drop heredoc bodies only: the lines after the opening line, up to the
+    closing delimiter. The opening line is kept and scanned. A "<<" inside
+    quotes on its line, or a heredoc that is never closed, strips nothing."""
+    out, pos = [], 0
+    while True:
+        match = HEREDOC_OPEN.search(command, pos)
+        if not match:
+            break
+        line_start = command.rfind("\n", 0, match.start()) + 1
+        before = command[line_start:match.start()]
+        if before.count("'") % 2 or before.count('"') % 2:
+            pos = match.end()
+            continue
+        body_start = command.find("\n", match.end())
+        if body_start < 0:
+            break
+        close = re.compile(r"\n[ \t]*" + re.escape(match.group(2)) + r"[ \t]*(?=\n|$)").search(command, body_start)
+        if not close:
+            break
+        out.append(command[pos:body_start])
+        pos = close.end()
+    out.append(command[pos:])
+    return "".join(out)
+
+
+def _substitutions(command: str) -> list[str]:
+    """Commands inside $(...), <(...), >(...) or backticks."""
+    inner = re.findall(r"[$<>]\(([^()]*(?:\([^()]*\)[^()]*)*)\)", command)
+    inner += re.findall(r"`([^`]*)`", command)
+    return inner
 
 
 def secret_name(value: str) -> str | None:
@@ -138,19 +175,35 @@ def _push_reason(args: list[str]) -> str | None:
 
 
 def bash_reason(command: str, depth: int = 0) -> str | None:
-    command = HEREDOC.sub("<<heredoc", command)
+    if depth > MAX_DEPTH:
+        return "command nesting too deep to check"
+    command = _strip_heredoc_bodies(command)
+    # Substitutions run even inside message text or echo arguments, and a
+    # backtick span can cross words, so find them in the raw string.
+    for sub in _substitutions(command):
+        inner = bash_reason(sub, depth + 1)
+        if inner:
+            return inner
     for words in _commands(command):
         words = _strip_wrappers(words)
         if not words:
             continue
         program = PurePath(words[0]).name
         args = words[1:]
-        if program in SHELLS and "-c" in args and depth < 3:
-            index = args.index("-c")
-            if index + 1 < len(args):
-                inner = bash_reason(args[index + 1], depth + 1)
-                if inner:
-                    return inner
+        inner_command = None
+        if program in SHELLS:
+            for index, arg in enumerate(args):
+                if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg):  # -c, -lc, -ec, ...
+                    rest = [a for a in args[index + 1:] if not a.startswith("-")]
+                    inner_command = rest[0] if rest else None
+                    break
+        elif program == "eval":
+            inner_command = " ".join(args)
+        if inner_command is not None:
+            inner = bash_reason(inner_command, depth + 1)
+            if inner:
+                return inner
+
         if program == "rm":
             reason = _rm_reason(args)
             if reason:
@@ -168,6 +221,11 @@ def bash_reason(command: str, depth: int = 0) -> str | None:
                 pattern = secret_name(token) if token else None
                 if pattern:
                     return f"touches a secret-shaped file ({pattern}): {token}"
+                if token and program not in LISTERS and any(c in token for c in "*?["):
+                    name = PurePath(token).name
+                    hits = [s for s in EXAMPLE_SECRETS if fnmatch.fnmatchcase(s, name) and (name.startswith(".") or not s.startswith("."))]
+                    if hits:
+                        return f"glob {token} could match a secret-shaped file ({hits[0]})"
     return None
 
 
