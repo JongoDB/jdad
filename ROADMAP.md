@@ -4,7 +4,7 @@ Read [docs/VISION.md](docs/VISION.md) first. This file is the work queue for age
 
 ## How to use this file
 
-1. Take the **first unchecked item** whose dependencies are checked and that isn't marked **Needs Jon** (or whose Jon input is already recorded on its card or as a **Decision** line here).
+1. Take the **first unchecked item in [Current order](#current-order)** whose dependencies are checked and that isn't marked **Needs Jon** (or whose Jon input is already recorded on its card or as a **Decision** line here). Items not listed there follow in file order.
 2. Find or create its Linear card (workspace `jongodb`, team `JON`, project `JDAD`) and post a plan there before writing code: steps, risks, and how each acceptance criterion will be verified.
 3. Work on a branch, run `./verify`, and open a PR that links the card, shows evidence (commands and output), and lists anything unverified. Checker reviews it. Don't merge your own PR.
 4. In the same PR, tick the item here (`- [x]`) and add the PR number after its title.
@@ -15,9 +15,24 @@ Each item is sized for one agent session. If an item turns out bigger, split it 
 
 Legend: **Needs Jon** = needs a decision, access, or money from Jon before or during the item. IDs are stable; never renumber. Add new items at the end of a phase with the next free number.
 
+## Current order
+
+IDs stay in file order, so the working order lives here. Set 2026-11-22 from the [red-team review](docs/reviews/2026-11-22-red-team.md#proposed-roadmap-order) and Jon's decisions that afternoon (brief 02):
+
+1. **P0.6, P0.7, P0.8**: origin lockdown, protect `main` and bot identities, CI and a portable `./verify`. Also the KB poisoning defences (red-team H4, JON-1341, PR #8), which feed P1.2.
+2. **P0.9** operations basics.
+3. **P3.7** token through plugin `userConfig` (moved up: new hosts fail silently without it).
+4. **P1.2** widened (parser fixes M3, M4 on top of `jdad lint-kb`), then **P1.3**.
+5. **P2.1**, **P2.4**: grow the KB.
+6. **P1.1**, **P1.6**.
+7. **P1.4**, **P1.5** once there are at least two skills.
+8. **P3.1**, then the rest in file order.
+
+Deferred (Jon, 2026-11-22 3:16 PM ET): **P3.2** semantic search and the droplet RAM increase.
+
 ---
 
-## Phase 0: Foundation (done)
+## Phase 0: Foundation
 
 - [x] **P0.1 Knowledge base seed** (d104c73): `sources/` + `practices/performance.md` from the breakingbreach performance reel.
 - [x] **P0.2 MCP server, HTTP transport, Claude Code plugin** (#1, JON-1330): `jdad-mcp` with 7 read-only tools, `kb://practices/{name}`, `apply-kb` prompt, bearer auth, host allowlist, `/jdad plan|review|perf|add`, `jdad-performance` skill, `./verify`, systemd deploy.
@@ -26,6 +41,27 @@ Legend: **Needs Jon** = needs a decision, access, or money from Jon before or du
 - [ ] **P0.5 Hosted endpoint deployed and proven** ([ADR 0005](docs/adr/0005-hosted-deploy-cloudflare-full-strict.md))
   - Acceptance: on the droplet, the running container's `JDAD_GIT_SHA` equals `main`'s head SHA; through `https://jdad-mcp.jondevs.com/mcp` with a valid token, `initialize`, `tools/list` and one `tools/call` return 200; with no token, 401; a request with a non-allowlisted `Host` gets 421 at the origin; `curl` with the Cloudflare Origin CA root as `--cacert` verifies the origin certificate; Cloudflare's SSL mode for the host is Full (strict). Tokens redacted in the PR. When this passes, ADR 0005 moves to Accepted.
   - Depends on: P0.3. **Needs Jon:** droplet access and the Cloudflare Configuration Rule.
+- [ ] **P0.6 Origin lockdown** (red-team H3, JON-1340, PR #7)
+  - Goal: only Cloudflare can reach the origin, so the token isn't the only gate and Cloudflare's edge controls can't be bypassed.
+  - Deliverables: Host allowlist before auth on every path (421 for a foreign Host on `/healthz` too); `deploy/firewall-cloudflare.sh` (`DOCKER-USER` and `INPUT` hooks for TCP 443, Cloudflare ranges only, IPv4 and IPv6, boot unit, refresh, rollback, dry run); README sections on the firewall layers and the origin certificate's SAN exposure.
+  - Acceptance: tests in `./verify` cover the Host check and the firewall (rules, refusals, real iptables in a container). Runtime: on the droplet, from a host outside Cloudflare's ranges, a TCP connect to the origin on 443 times out over IPv4 (and IPv6 if present), while `https://jdad-mcp.jondevs.com/healthz` and an authenticated `tools/call` still return 200, also after a reboot; without that run the item stays open as runtime unverified.
+  - Depends on: P0.5. Decision (Jon, 2026-11-22 3:16 PM ET): the host firewall is approved. Daisy applies it.
+- [ ] **P0.7 Protect `main` and give bots their own identities** (red-team H1, JON-1338, PR #12)
+  - Goal: what reaches `main` (and so the droplet and every plugin install) has been through a PR, CI and someone other than its author.
+  - Deliverables: the pre-public scrub (`docs/reviews/2026-11-22-pre-public-scrub.md`); the phased ruleset and identity plan (`docs/ops/github-protection-plan.md`); CODEOWNERS for KB content.
+  - Acceptance: `gh api repos/JongoDB/jdad/rules/branches/main` shows: PR required, no force push, no deletion, no bypass actors, and (after P0.8) the `verify` check required; a PR opened by a bot identity can't be approved by that identity; `JongoDB` credentials are revoked on every bot host (dates on the card).
+  - Depends on: P0.6 and PR #8 merged (the scrub's gating steps). **Needs Jon:** make the repo public, then apply the ruleset; create the GitHub Apps and the machine user.
+  - Decision (Jon, 2026-11-22 3:16 PM ET): the repo will be public (no proprietary or sensitive data; the KB is not confidential), `main` gets protected after that, and bots get their own GitHub identity.
+- [ ] **P0.8 CI runs and `./verify` is portable** (red-team H2 and M10, JON-1339, PRs #9 and #11)
+  - Goal: every PR has an automated pass/fail, and the builder's machine can produce one too.
+  - Deliverables: portable file-mode reads; `DOCKER_CONFIG` kept when the Docker test overrides `HOME`; the async fixture fix; `.python-version`; a skipped `claude plugin validate` fails under `CI`; the workflow installs a pinned Claude Code CLI.
+  - Acceptance: `./verify` ends `verify: ok` on macOS (OrbStack) and on Linux, outputs in the PR; a GitHub Actions `verify` run on a PR is green, with its URL on the card.
+  - Depends on: P0.7's repo switch (Actions is free once public). **Needs Jon:** the repo switch, or the Actions billing fix approved on 2026-11-22.
+- [ ] **P0.9 Operations basics** (red-team M1, M2, M5, M6, M7, JON-1344)
+  - Goal: the endpoint survives a bad commit, a noisy client and a lost droplet, and someone notices when it's down.
+  - Deliverables: compose `mem_limit`, `pids_limit`, `cpus` and log rotation; `jdad-mcp --check` in the image build and before the swap in `update-docker.sh`; rollback resets the checkout to the previous SHA; NetBird documented as kept stopped; an external uptime check on `/healthz`; `docs/ops/rebuild-runbook.md`; a token rotation runbook.
+  - Acceptance: the Docker suite asserts the limits and log options, refuses a commit that breaks only the KB before the swap (running image unchanged), and shows the checkout back on the previous SHA after a rollback; `jdad-mcp --check` has a failing test for a non-UTF-8 practice, a symlink and an unreadable source. Runtime: one rotation rehearsed on the droplet (old token 401, new token 200); without it the item stays open as runtime unverified.
+  - Depends on: P0.8 (PR #9's token file). Decision (Jon, 2026-11-22 3:16 PM ET): keep the stopped NetBird stack and document it.
 
 ## Phase 1: One source of truth
 
@@ -38,7 +74,7 @@ Goal: before adding features, make the repo itself cross-tool and give the KB an
   - Depends on: P0.3 (done; both PRs edit `CLAUDE.md`).
 - [ ] **P1.2 Practice schema and stable rule IDs**
   - Goal: every rule is addressable, so checklists, reviews and dedupe can cite `perf.db.n-plus-one` instead of a bullet's position.
-  - Deliverables: `docs/kb-schema.md` (rule ID format, required tag, `src:` citation, optional `applies-when`, `origin: source|kb-addition`); migrate `practices/performance.md`; `jdad lint-kb` command (stdlib only) wired into `./verify`; `kb.py` parses IDs.
+  - Deliverables: `docs/kb-schema.md` (rule ID format, required tag, `src:` citation, optional `applies-when`, `origin: source|kb-addition`); migrate `practices/performance.md`; structural checks added to `jdad lint-kb` (the content checks landed with JON-1341, PR #8); `kb.py` parses IDs. Widened by the red-team review: preamble rules such as Rule zero get IDs and appear in checklists, and nested bullets, continuation lines and numbered items are parsed or rejected, never dropped silently (M4); one unreadable file doesn't break the listing tools (M3).
   - Acceptance: lint fails on a rule with no tag, no citation, a duplicate ID or an unknown tag (tests show each failure); all existing MCP tests pass; `search_practices` and `get_checklist` results include rule IDs.
   - Depends on: none.
 - [ ] **P1.3 Source file schema and ingestion contract**
@@ -103,6 +139,7 @@ Goal: richer, still read-only and offline tools. ([ADR 0003](docs/adr/0003-stdio
   - Acceptance: server starts and the full suite passes without the extra; with it, on ≥ 20 committed, labeled paraphrase queries, semantic recall@5 ≥ lexical recall@5 + 0.10; peak RSS under a fixed 100-request workload is recorded in the PR and is ≤ the memory budget Jon approves on the card.
   - Depends on: P3.1. **Needs Jon:** the droplet's new RAM size and the memory budget for the acceptance check. Both stay open until Jon regains DigitalOcean console access (support ticket open).
   - Decision (Jon, 2026-11-22 11:35 AM ET): semantic search and its dependency are approved, and the droplet's RAM will be increased.
+  - Decision (Jon, 2026-11-22 3:16 PM ET): **deferred**, together with the RAM increase. Revisit when the KB is large enough that P3.1's lexical search measurably misses paraphrases.
 - [ ] **P3.3 Checklists v2**
   - Deliverables: `get_checklist(tags, phase="plan|review|ship")` returns Markdown checkboxes with rule IDs and citations; `kb://checklists/{tag}` resources.
   - Acceptance: for each of `plan`, `review` and `ship`, tests assert the rule IDs selected for a fixture tag set, that every line matches `- [ ] <rule-id>: <text> (<citation URL>)`, and that `kb://checklists/{tag}` equals `get_checklist([tag])`; tests on the command files assert `/jdad plan` and `/jdad review` instruct the agent to cite rule IDs.
@@ -175,9 +212,9 @@ Goal: the verify/CI, security, observability and performance opinions as KB rule
   - Acceptance: a fixture config sets limits for bundle bytes, a Lighthouse score and p95 latency; for each, a below-limit fixture passes and an above-limit fixture fails with measured vs target in the output; overriding the limit in the repo config flips the result; rules cited or labeled.
   - Depends on: P5.1.
 - [ ] **P5.6 Edge protection for the hosted MCP endpoint**
-  - Deliverables: rate limiting and WAF rules (Cloudflare) or an app-level limiter for `jdad-mcp.jondevs.com`; a token-rotation runbook. PR #2's Unverified list defers this: "Rate limiting / WAF is deferred for this release (already covered as P5.6 in the roadmap PR)."
-  - Acceptance: with a test token and a test hostname or a staging rule (no flood against production): after N requests in the configured window the endpoint returns 429 with `Retry-After`, and returns 200 again after the window; N and the window are in the runbook. Rotation: after following the runbook once, the old token gets 401 and the new token gets 200; tokens are redacted in the PR.
-  - Depends on: P0.5. **Needs Jon:** Cloudflare dashboard changes.
+  - Deliverables: rate limiting and WAF rules (Cloudflare) or an app-level limiter for `jdad-mcp.jondevs.com`. PR #2's Unverified list defers this: "Rate limiting / WAF is deferred for this release (already covered as P5.6 in the roadmap PR)." The token-rotation runbook moved to P0.9, and this item comes after P0.6, since edge limits mean little while the origin is reachable directly.
+  - Acceptance: with a test token and a test hostname or a staging rule (no flood against production): after N requests in the configured window the endpoint returns 429 with `Retry-After`, and returns 200 again after the window; N and the window are in the runbook.
+  - Depends on: P0.5, P0.6. **Needs Jon:** Cloudflare dashboard changes.
 
 ## Phase 6: Evals
 
