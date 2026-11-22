@@ -152,7 +152,13 @@ A local `.mcp.json` (stdio is also fine) looks like this:
 }
 ```
 
-That example is loopback only. To reach the server from another machine on your LAN (for example `http://192.168.1.20:8765/mcp` or a LAN hostname), the server must also bind a non-loopback address (`--host 0.0.0.0` or the LAN IP, which requires `JDAD_TOKEN`), and `JDAD_ALLOWED_HOSTS` must list the name or IP the client puts in `Host` (for example `JDAD_ALLOWED_HOSTS=192.168.1.20:8765,jdad.lan`). Otherwise the request gets `421 Invalid Host header`. Plain HTTP on a LAN sends the token unencrypted; prefer TLS (`--ssl-certfile` / `--ssl-keyfile`) or stdio.
+That example is loopback only. To reach the server from another machine on your LAN (for example `https://jdad.lan:8765/mcp`), the server must:
+
+- bind a non-loopback address (`--host 0.0.0.0` or the LAN IP), which requires `JDAD_TOKEN`;
+- serve TLS (`--ssl-certfile` / `--ssl-keyfile`, with a cert the client trusts for that name), because plain HTTP sends the token unencrypted and non-loopback hosts only get `https://` origins (browser-style clients that send `Origin: http://…` are rejected with 403; header-less MCP clients aren't affected);
+- list the name the client puts in `Host` in `JDAD_ALLOWED_HOSTS` (for example `JDAD_ALLOWED_HOSTS=jdad.lan`), or requests get `421 Invalid Host header`.
+
+If you can't do all three, use stdio instead.
 
 Stdio still works if you would rather run the server locally, including `uvx --from git+https://github.com/JongoDB/jdad jdad-mcp` (or `git+ssh://git@github.com/JongoDB/jdad`) with `gh auth` or an SSH key on the host.
 

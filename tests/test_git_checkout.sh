@@ -31,3 +31,17 @@ check no "$TMP/plain"
 check no "$TMP/repo/sub"
 check no "$TMP/missing"
 echo "ok is_git_checkout accepts a clone and a worktree, rejects plain dirs and subdirs"
+
+# update-docker.sh from a plain copy: one clean error, no git "fatal" noise.
+mkdir -p "$TMP/plain/deploy"
+cp "$ROOT/deploy/update-docker.sh" "$ROOT/deploy/common.sh" "$TMP/plain/deploy/"
+if "$TMP/plain/deploy/update-docker.sh" >"$TMP/plain.out" 2>"$TMP/plain.err"; then
+  echo "FAIL update-docker.sh ran from a plain copy" >&2
+  exit 1
+fi
+if [[ "$(cat "$TMP/plain.err")" != "jdad: no git checkout at $TMP/plain" ]]; then
+  echo "FAIL update-docker.sh from a plain copy printed:" >&2
+  cat "$TMP/plain.err" >&2
+  exit 1
+fi
+echo "ok update-docker.sh from a plain copy fails with one clean error"

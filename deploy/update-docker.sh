@@ -27,6 +27,13 @@ COMPOSE=(docker compose -p "$PROJECT" -f "$HERE/docker-compose.yml")
 IMAGE_REPO="${JDAD_IMAGE_REPO:-jdad}"
 export JDAD_IMAGE_REPO="$IMAGE_REPO"
 
+# Check for a checkout before any git command, so a plain copy gets one
+# clear error instead of git's "fatal: not a git repository" first.
+if ! is_git_checkout "$ROOT"; then
+  echo "jdad: no git checkout at $ROOT" >&2
+  exit 1
+fi
+
 export JDAD_GIT_SHA="${JDAD_GIT_SHA:-$(git -C "$ROOT" rev-parse HEAD)}"
 export JDAD_UID="${JDAD_UID:-$(id -u)}"
 export JDAD_GID="${JDAD_GID:-$(id -g)}"
@@ -37,10 +44,6 @@ if ! command -v docker >/dev/null 2>&1; then
 fi
 if ! docker info >/dev/null 2>&1; then
   echo "jdad: docker daemon is not available (is this user in the docker group?)" >&2
-  exit 1
-fi
-if ! is_git_checkout "$ROOT"; then
-  echo "jdad: no git checkout at $ROOT" >&2
   exit 1
 fi
 if ! command -v curl >/dev/null 2>&1; then
@@ -55,6 +58,9 @@ fi
 # The URL for /healthz on the published port. JDAD_HEALTH_URL overrides
 # it; otherwise ask compose which host port maps to 8443 (443 in prod,
 # an ephemeral port in tests), falling back to JDAD_PUBLISH or 443.
+# Returns 1 with no output when no port is known (for example a
+# restart-looping container on an ephemeral port), so callers fail
+# closed instead of probing some other service on 443.
 health_url() {
   if [[ -n "${JDAD_HEALTH_URL:-}" ]]; then
     printf '%s\n' "$JDAD_HEALTH_URL"
@@ -68,6 +74,9 @@ health_url() {
     port=443
   elif [[ "${JDAD_PUBLISH##*:}" =~ ^[0-9]+$ ]]; then
     port="${JDAD_PUBLISH##*:}"
+  fi
+  if [[ -z "$port" ]]; then
+    return 1
   fi
   printf 'https://127.0.0.1:%s/healthz\n' "$port"
 }
@@ -127,7 +136,9 @@ precheck_uid() {
 
 probe_health() {
   local body url
-  url="$(health_url)"
+  if ! url="$(health_url)"; then
+    return 1  # no published port yet: unhealthy, nothing probed
+  fi
   # -k: the Origin CA (or a local self-signed cert) is not in the public
   # trust store, and this probe hits 127.0.0.1 rather than the hostname.
   if body="$(curl -fsSk --max-time 5 "$url")"; then
@@ -147,7 +158,7 @@ wait_for_health() {
     fi
     sleep 1
   done
-  echo "jdad: $(health_url) did not return 200 {\"status\":\"ok\"} after waiting" >&2
+  echo "jdad: $(health_url || echo '/healthz (no published port)') did not return 200 {\"status\":\"ok\"} after waiting" >&2
   return 1
 }
 

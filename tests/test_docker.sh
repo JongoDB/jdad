@@ -131,23 +131,25 @@ PY
 # --- canary: stray env/key under src/ and practices/ must not be in the image
 printf 'CANARY_SHOULD_NOT_BE_IN_IMAGE=1\n' > "$CANARY_ENV"
 printf 'CANARY_KEY_MATERIAL=1\n' > "$CANARY_KEY"
-docker build -t "$CANARY_IMG" --build-arg JDAD_GIT_SHA=canary "$ROOT" >/dev/null
-docker create --name "$TAG_ID-canary-ctr" "$CANARY_IMG" >/dev/null
+# Build through compose (BuildKit) rather than `docker build`: this daemon
+# has no buildx, so the legacy builder would leave dangling stage images.
+JDAD_IMAGE_REPO="$CANARY_IMG" JDAD_GIT_SHA=canary "${COMPOSE[@]}" build >/dev/null
+docker create --name "$TAG_ID-canary-ctr" "$CANARY_IMG:canary" >/dev/null
 if docker export "$TAG_ID-canary-ctr" | tar -t | grep -E '(^|/)\.env$|(^|/)canary\.key$'; then
   echo "FAIL canary secret files were baked into the image" >&2
   exit 1
 fi
 docker rm "$TAG_ID-canary-ctr" >/dev/null
-docker image rm -f "$CANARY_IMG" >/dev/null
+docker image rm -f "$CANARY_IMG:canary" >/dev/null
 rm -f "$CANARY_ENV" "$CANARY_KEY"
 echo "ok dockerignore canary (.env and *.key not in image)"
 
 # --- literal quoted token is treated as unset (docker run --env)
-docker build -t "$IMG:test" --build-arg JDAD_GIT_SHA="$SHA" "$ROOT" >/dev/null
+"${COMPOSE[@]}" build >/dev/null
 if docker run --rm --name "$TAG_ID-token-quote" \
   -e JDAD_TOKEN='""' \
   -e JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com \
-  "$IMG:test" >/dev/null 2>"$WORKDIR/quote.err"; then
+  "$IMG:$SHA" >/dev/null 2>"$WORKDIR/quote.err"; then
   echo "FAIL docker run with JDAD_TOKEN=\"\" should have refused to start" >&2
   cat "$WORKDIR/quote.err" >&2
   exit 1
@@ -159,19 +161,19 @@ if ! grep -q "refusing to bind 0.0.0.0 without JDAD_TOKEN" "$WORKDIR/quote.err";
 fi
 echo "ok docker run treats JDAD_TOKEN=\"\" as unset"
 
-owner="$(docker run --rm --user 0 --entrypoint stat "$IMG:test" -c '%u' /app/.venv)"
+owner="$(docker run --rm --user 0 --entrypoint stat "$IMG:$SHA" -c '%u' /app/.venv)"
 if [[ "$owner" != 0 ]]; then
   echo "FAIL /app/.venv owner is uid $owner, expected 0" >&2
   exit 1
 fi
 echo "ok /app/.venv is root-owned"
 
-app_mode="$(docker run --rm --user 0 --entrypoint stat "$IMG:test" -c '%a' /app)"
+app_mode="$(docker run --rm --user 0 --entrypoint stat "$IMG:$SHA" -c '%a' /app)"
 if [ "$app_mode" != "755" ]; then
   echo "FAIL /app mode is $app_mode, expected 755 so the compose uid can exec jdad-mcp" >&2
   exit 1
 fi
-if ! docker run --rm --user "$(id -u):$(id -g)" --entrypoint /bin/sh "$IMG:test" -c 'command -v jdad-mcp >/dev/null'; then
+if ! docker run --rm --user "$(id -u):$(id -g)" --entrypoint /bin/sh "$IMG:$SHA" -c 'command -v jdad-mcp >/dev/null'; then
   echo "FAIL compose uid cannot execute jdad-mcp (is /app mode 0700?)" >&2
   exit 1
 fi
@@ -308,11 +310,15 @@ CLONE="$WORKDIR/repo"
 git clone -q "$ROOT" "$CLONE"
 git -C "$ROOT" ls-files -z -c -o --exclude-standard | (cd "$ROOT" && xargs -0 tar -cf - --) | tar -xf - -C "$CLONE"
 git -C "$CLONE" add -A
-if ! git -C "$CLONE" diff --cached --quiet; then
-  git -C "$CLONE" -c user.name=jdad-test -c user.email=jdad-test@example.invalid \
-    commit -q -m "test: working tree"
-fi
+# Always commit (even with no changes), so GOOD differs from SHA and the
+# running $IMG:$SHA is a distinct "previous" image for the prune check.
+git -C "$CLONE" -c user.name=jdad-test -c user.email=jdad-test@example.invalid \
+  commit -q --allow-empty -m "test: working tree"
 GOOD="$(git -C "$CLONE" rev-parse HEAD)"
+if [[ "$GOOD" == "$SHA" ]]; then
+  echo "FAIL the clone's good commit should differ from $SHA" >&2
+  exit 1
+fi
 
 run_update() {
   HOME="$TESTHOME" JDAD_UID="${UPDATE_UID:-$JDAD_UID}" JDAD_GID="$JDAD_GID" \
@@ -354,7 +360,13 @@ for kept in "$IMG:$GOOD" "$IMG:$SHA" "$IMG:previous"; do
     exit 1
   fi
 done
-echo "ok update-docker.sh pruned old sha tags and kept current + previous"
+# previous is a distinct image (the one that was running before), not the current one.
+prev_id="$(docker image inspect -f '{{.Id}}' "$IMG:previous")"
+if [[ "$prev_id" != "$(docker image inspect -f '{{.Id}}' "$IMG:$SHA")" || "$prev_id" == "$(docker image inspect -f '{{.Id}}' "$IMG:$GOOD")" ]]; then
+  echo "FAIL $IMG:previous should be the pre-update image $IMG:$SHA, distinct from $IMG:$GOOD" >&2
+  exit 1
+fi
+echo "ok update-docker.sh pruned old sha tags and kept current + a distinct previous"
 
 # --- prechecks refuse before touching the running service
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -days 1 -nodes \
@@ -365,7 +377,11 @@ if JDAD_SSL_KEYFILE_HOST="$WORKDIR/other.key" run_update > "$WORKDIR/mismatch.lo
   exit 1
 fi
 grep -q "does not match the public key" "$WORKDIR/mismatch.log" || { cat "$WORKDIR/mismatch.log" >&2; echo "FAIL no mismatch message" >&2; exit 1; }
-echo "ok precheck refuses a cert/key pair that does not match"
+if [[ "$(running_image)" != "$IMG:$GOOD" ]]; then
+  echo "FAIL a refused cert/key precheck changed the running image" >&2
+  exit 1
+fi
+echo "ok precheck refuses a cert/key pair that does not match and leaves the service alone"
 
 if UPDATE_UID=0 run_update > "$WORKDIR/root.log" 2>&1; then
   echo "FAIL update-docker.sh accepted JDAD_UID=0" >&2
@@ -392,6 +408,10 @@ fi
 if ! grep -q "rolled back to $IMG:$GOOD and https://127.0.0.1:[0-9]*/healthz is ok" "$WORKDIR/rollback.log"; then
   echo "FAIL rollback did not report a healthy rollback to $IMG:$GOOD" >&2
   cat "$WORKDIR/rollback.log" >&2
+  exit 1
+fi
+if grep -q '127\.0\.0\.1:/healthz' "$WORKDIR/rollback.log"; then
+  echo "FAIL update-docker.sh built a health URL with no port (would probe 443)" >&2
   exit 1
 fi
 if ! docker image inspect "$IMG:$BROKEN" >/dev/null 2>&1; then
