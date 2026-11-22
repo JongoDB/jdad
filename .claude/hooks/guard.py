@@ -6,11 +6,14 @@ Denies, before the tool runs:
 - `rm` with both recursive and force flags (`rm -rf`, `rm -fr`, `rm -r -f`, ...);
 - `git push` with `--force`, `-f`, `--force-with-lease` or a `+refspec`.
 
-It repeats the deny rules in .claude/settings.json on purpose. Those match
-command text; this parses each segment of a compound command, `sh -c`
-strings and wrapper commands, and it can be tested offline
-(tests/test_harness.py). Reads stdin JSON (tool_name, tool_input) and, to
-deny, prints hookSpecificOutput.permissionDecision = "deny". Stdlib only.
+It repeats the deny rules in .claude/settings.json on purpose: those match
+command text, while this scans the command with a small quote-aware
+scanner (command substitutions, heredocs, compound commands, `sh -c`,
+`eval`, `find -exec`, wrappers) and fails closed when it can't tell (an
+unclosed substitution, nesting too deep). It is not a sandbox: a script
+that opens a file itself is out of its reach. Reads the hook's stdin JSON
+(tool_name, tool_input); to deny, prints hookSpecificOutput with
+permissionDecision "deny". Stdlib only; tests in tests/test_harness.py.
 """
 
 from __future__ import annotations
@@ -23,88 +26,201 @@ import sys
 from pathlib import PurePath
 
 SECRET_GLOBS = (".env*", "*.pem", "id_*")
+# Names a glob is tested against (plus candidates built from the glob's own
+# literal text): could the shell expand it to a secret-shaped file?
+SECRET_SAMPLES = (
+    ".env", ".env.local", ".env.production", ".envrc", "x.pem", "key.pem",
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_ed25519.pub", "id_rsa-cert.pub",
+)
 PATH_TOOLS = {"Read", "Edit", "Write", "NotebookEdit", "MultiEdit"}
 SEARCH_TOOLS = {"Grep", "Glob"}
 OPERATOR_CHARS = ";&|\n"
-# Free text, not file access: the value of these options (git commit -m,
-# gh pr comment --body, ...), and everything echo/printf print except a
-# redirect target. Without this a commit message naming ".env" is denied.
-MESSAGE_OPTIONS = {
-    "git": {"-m", "--message"},
-    "gh": {"-b", "--body", "-t", "--title", "-n", "--notes"},
-}
-TEXT_PROGRAMS = {"echo", "printf"}
 WRAPPERS = {"sudo", "env", "command", "builtin", "nohup", "nice", "time", "timeout", "stdbuf", "xargs", "exec"}
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
-# Heredoc bodies are data (a script or a document), not arguments: drop them
-# before looking for secret-shaped words. A script that opens a file itself
-# is out of reach of any command-text check (the sandbox is the control).
-HEREDOC_OPEN = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1")
-# Programs that only list names; a glob argument to them reads nothing.
+# Programs that only print names: a glob argument to them reads nothing.
 LISTERS = {"ls", "find", "echo", "printf", "stat", "du", "tree"}
-EXAMPLE_SECRETS = (".env", ".env.local", "x.pem", "id_ed25519")
-MAX_DEPTH = 3
+FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
+# Free text, not file access: the value of these options, and what
+# echo/printf print (apart from a redirect target).
+MESSAGE_OPTIONS = {"git": {"-m", "--message"}, "gh": {"-b", "--body", "-t", "--title", "-n", "--notes"}}
+TEXT_PROGRAMS = {"echo", "printf"}
+MAX_DEPTH = 4
+# Glob characters inside quotes are literal; the scanner swaps them for
+# these markers so only unquoted ones count as globs.
+QUOTED_GLOB = {"*": "\x01", "?": "\x02", "[": "\x03"}
+_RESTORE = str.maketrans({v: k for k, v in QUOTED_GLOB.items()})
 
 
-def _strip_heredoc_bodies(command: str) -> str:
-    """Drop heredoc bodies only: the lines after the opening line, up to the
-    closing delimiter. The opening line is kept and scanned. A "<<" inside
-    quotes on its line, or a heredoc that is never closed, strips nothing."""
-    out, pos = [], 0
-    while True:
-        match = HEREDOC_OPEN.search(command, pos)
-        if not match:
-            break
-        line_start = command.rfind("\n", 0, match.start()) + 1
-        before = command[line_start:match.start()]
-        if before.count("'") % 2 or before.count('"') % 2:
-            pos = match.end()
+def restore(text: str) -> str:
+    return text.translate(_RESTORE)
+
+
+HEREDOC_RE = re.compile(r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([A-Za-z0-9_.-]+))")
+
+
+class Unclear(Exception):
+    """The scanner can't tell what the shell would run: deny."""
+
+
+# ---- quote-aware scanning --------------------------------------------------
+
+
+def _match_paren(text: str, start: int) -> int:
+    """Index of the ')' closing the '(' at text[start], aware of quotes."""
+    depth, i, quote = 0, start, None
+    while i < len(text):
+        c = text[i]
+        if quote == "'":
+            if c == "'":
+                quote = None
+        elif c == "\\":
+            i += 1
+        elif quote == '"':
+            if c == '"':
+                quote = None
+        elif c in "'\"":
+            quote = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+        i += 1
+    raise Unclear("unclosed substitution")
+
+
+def _match_backtick(text: str, start: int) -> int:
+    i = start + 1
+    while i < len(text):
+        if text[i] == "\\":
+            i += 2
             continue
-        body_start = command.find("\n", match.end())
-        if body_start < 0:
-            break
-        close = re.compile(r"\n[ \t]*" + re.escape(match.group(2)) + r"[ \t]*(?=\n|$)").search(command, body_start)
-        if not close:
-            break
-        out.append(command[pos:body_start])
-        pos = close.end()
-    out.append(command[pos:])
-    return "".join(out)
+        if text[i] == "`":
+            return i
+        i += 1
+    raise Unclear("unclosed backtick")
 
 
-def _substitutions(command: str) -> list[str]:
-    """Commands inside $(...), <(...), >(...) or backticks."""
-    # A backslash-escaped "\\$(" or "\\`" is literal text, never run.
-    # An even run of backslashes before it ("\\\\$(") leaves it live.
-    inner = re.findall(r"(?<!\\)(?:\\\\)*[$<>]\(([^()]*(?:\([^()]*\)[^()]*)*)\)", command)
-    inner += re.findall(r"(?<!\\)(?:\\\\)*`((?:[^`\\]|\\.)*)(?<!\\)`", command)
+def _body_substitutions(body: str) -> list[str]:
+    """$(...) and `...` in an unquoted heredoc body (quotes are literal there)."""
+    inner, p = [], 0
+    while p < len(body):
+        if body[p] == "\\":
+            p += 2
+        elif body.startswith("$(", p):
+            end = _match_paren(body, p + 1)
+            inner.append(body[p + 2:end])
+            p = end + 1
+        elif body[p] == "`":
+            end = _match_backtick(body, p)
+            inner.append(body[p + 1:end])
+            p = end + 1
+        else:
+            p += 1
     return inner
 
 
-def secret_name(value: str) -> str | None:
-    name = PurePath(value.strip().strip("'\"")).name
-    for pattern in SECRET_GLOBS:
-        if name and fnmatch.fnmatchcase(name, pattern):
-            return pattern
-    return None
+def scan(command: str) -> tuple[str, list[str]]:
+    """Return (command with heredoc bodies removed, inner commands to check).
+
+    Inner commands are every $(...), <(...), >(...) and `...` the shell
+    would run: outside single quotes, unescaped, including inside unquoted
+    heredoc bodies. A heredoc body with a quoted delimiter (<<'EOF') is
+    literal data and is skipped. A backslash escapes only outside single
+    quotes.
+    """
+    out: list[str] = []
+    inner: list[str] = []
+    i, quote, n = 0, None, len(command)
+    while i < n:
+        c = command[i]
+        if quote == "'":
+            out.append(QUOTED_GLOB.get(c, c))
+            quote = None if c == "'" else quote
+            i += 1
+        elif c == "\\":
+            out.append(command[i:i + 2])
+            i += 2
+        elif c == "$" and command.startswith("(", i + 1):
+            end = _match_paren(command, i + 1)
+            inner.append(command[i + 2:end])
+            out.append(command[i:end + 1])
+            i = end + 1
+        elif c == "`":
+            end = _match_backtick(command, i)
+            inner.append(command[i + 1:end])
+            out.append(command[i:end + 1])
+            i = end + 1
+        elif quote == '"':
+            out.append(QUOTED_GLOB.get(c, c))
+            quote = None if c == '"' else quote
+            i += 1
+        elif c in "<>" and command.startswith("(", i + 1):
+            end = _match_paren(command, i + 1)
+            inner.append(command[i + 2:end])
+            out.append(command[i:end + 1])
+            i = end + 1
+        elif c in "'\"":
+            quote = c
+            out.append(c)
+            i += 1
+        elif command.startswith("<<<", i):
+            out.append("<<<")
+            i += 3
+        elif command.startswith("<<", i) and HEREDOC_RE.match(command, i):
+            i = _heredoc(command, i, out, inner)
+        else:
+            out.append(c)
+            i += 1
+    if quote is not None:
+        raise Unclear("unclosed quote")
+    return "".join(out), inner
+
+
+def _heredoc(command: str, i: int, out: list[str], inner: list[str]) -> int:
+    match = HEREDOC_RE.match(command, i)
+    quoted = match.group(2) is not None or match.group(3) is not None
+    delimiter = match.group(2) if match.group(2) is not None else match.group(3) if quoted else match.group(4)
+    out.append(command[i:match.end()])
+    line_end = command.find("\n", match.end())
+    if line_end < 0:
+        return match.end()
+    # The rest of the opening line is ordinary shell text.
+    rest_out, rest_inner = scan(command[match.end():line_end])
+    out.append(rest_out + "\n")
+    inner.extend(rest_inner)
+    strip = "\t" if match.group(1) else ""
+    body_lines, j, n = [], line_end + 1, len(command)
+    while j < n:
+        k = command.find("\n", j)
+        k = n if k < 0 else k
+        line = command[j:k]
+        if line.lstrip(strip) == delimiter:
+            j = k
+            break
+        body_lines.append(line)
+        j = k + 1
+    else:
+        raise Unclear("heredoc never closed")
+    if not quoted:  # the body expands: $(...) and `...` run
+        inner.extend(_body_substitutions("\n".join(body_lines)))
+    return j
 
 
 def _commands(command: str) -> list[list[str]]:
-    """Split a command line into simple commands, respecting quotes, so a
-    ';' or newline inside a quoted message doesn't start a new command."""
+    """Split into simple commands, respecting quotes."""
     lex = shlex.shlex(command, posix=True, punctuation_chars=OPERATOR_CHARS)
     lex.whitespace = " \t\r"
     lex.whitespace_split = True
-    commands: list[list[str]] = []
-    current: list[str] = []
     try:
         tokens = list(lex)
-    except ValueError:  # unbalanced quotes: fall back to a plain split
-        tokens = re.split(r"\s+|([;&|\n]+)", command)
+    except ValueError as exc:
+        raise Unclear(f"can't split the command ({exc})") from None
+    commands: list[list[str]] = []
+    current: list[str] = []
     for token in tokens:
-        if not token:
-            continue
-        if set(token) <= set(OPERATOR_CHARS):
+        if token and set(token) <= set(OPERATOR_CHARS):
             if current:
                 commands.append(current)
             current = []
@@ -115,38 +231,63 @@ def _commands(command: str) -> list[list[str]]:
     return commands
 
 
-def _scanned_words(program: str, words: list[str]) -> list[str]:
-    """The words that could name a file (message text is left out)."""
-    if program in TEXT_PROGRAMS:
-        out = []
-        for previous, word in zip([""] + words, words, strict=False):
-            if previous in (">", ">>", "<", "1>", "2>", "&>") or any(c in word for c in "<>"):
-                out.append(word)
-        return out
-    options = MESSAGE_OPTIONS.get(program, set())
-    out, skip = [], False
-    for word in words:
-        if skip:
-            skip = False
+# ---- checks ----------------------------------------------------------------
+
+
+def secret_name(value: str) -> str | None:
+    name = PurePath(value.strip().strip("'\"")).name
+    for pattern in SECRET_GLOBS:
+        if name and fnmatch.fnmatchcase(name, pattern):
+            return pattern
+    return None
+
+
+def _expand_braces(word: str) -> list[str]:
+    match = re.search(r"\{([^{}]*,[^{}]*)\}", word)
+    if not match:
+        return [word]
+    out: list[str] = []
+    for part in match.group(1).split(","):
+        out.extend(_expand_braces(word[: match.start()] + part + word[match.end():]))
+    return out[:64]
+
+
+def glob_could_match_secret(token: str) -> bool:
+    """Could the shell expand this glob to a secret-shaped name? Tested
+    against sample secret names and names built from the glob's literal
+    head and tail (".env" + tail, "id_rsa" + tail, head + ".pem"). A leading
+    "*" or "?" doesn't match dotfiles, as in the shell."""
+    name = PurePath(token).name
+    if not any(c in name for c in "*?["):
+        return False
+    head = re.split(r"[*?\[]", name, maxsplit=1)[0]
+    tail = re.split(r"[*?\]]", name)[-1]
+    candidates = set(SECRET_SAMPLES) | {".env" + tail, "id_rsa" + tail, head + ".pem", head + "x.pem", head}
+    for sample in candidates:
+        if sample.startswith(".") and not name.startswith("."):
             continue
-        if word in options:
-            skip = True
-            continue
-        if any(word.startswith(option + "=") for option in options if option.startswith("--")):
-            continue
-        out.append(word)
-    return out
+        if fnmatch.fnmatchcase(sample, name) and _realistic_secret(sample):
+            return True
+    return False
+
+
+def _realistic_secret(name: str) -> bool:
+    """A secret file a glob could really reach. Literal names use the broader
+    SECRET_GLOBS (any id_* name); for globs that would deny every *.ext."""
+    return (
+        fnmatch.fnmatchcase(name, ".env*")
+        or fnmatch.fnmatchcase(name, "*.pem")
+        or re.fullmatch(r"id_(rsa|dsa|ecdsa|ed25519)(\.pub|-cert\.pub)?", name) is not None
+    )
 
 
 def _strip_wrappers(words: list[str]) -> list[str]:
     while words:
-        head = PurePath(words[0]).name
-        if head in WRAPPERS:
+        if PurePath(words[0]).name not in WRAPPERS:
+            return words
+        words = words[1:]
+        while words and (words[0].startswith("-") or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*|\d+[smhd]?", words[0])):
             words = words[1:]
-            while words and (words[0].startswith("-") or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*|\d+[smhd]?", words[0])):
-                words = words[1:]
-            continue
-        return words
     return words
 
 
@@ -155,7 +296,7 @@ def _rm_reason(args: list[str]) -> str | None:
     for arg in args:
         if arg == "--":
             break
-        if arg in ("--recursive",):
+        if arg == "--recursive":
             recursive = True
         elif arg == "--force":
             force = True
@@ -176,58 +317,101 @@ def _push_reason(args: list[str]) -> str | None:
     return None
 
 
+def _scanned_words(program: str, words: list[str]) -> list[str]:
+    """Words that could name a file (message text is left out)."""
+    if program in TEXT_PROGRAMS:
+        redirects = (">", ">>", "<", "1>", "2>", "&>")
+        return [w for prev, w in zip([""] + words, words, strict=False) if prev in redirects or any(c in w for c in "<>")]
+    options = MESSAGE_OPTIONS.get(program, set())
+    out, skip = [], False
+    for word in words:
+        if skip:
+            skip = False
+        elif word in options:
+            skip = True
+        elif not any(word.startswith(o + "=") for o in options if o.startswith("--")):
+            out.append(word)
+    return out
+
+
+def _nested_commands(program: str, args: list[str]) -> list[str]:
+    nested: list[str] = []
+    if program in SHELLS:
+        for index, arg in enumerate(args):
+            if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg):  # -c, -lc, -ec, ...
+                rest = [a for a in args[index + 1:] if not a.startswith("-")]
+                nested.extend(rest[:1])
+                break
+    elif program == "eval":
+        nested.append(" ".join(args))
+    elif program == "find":
+        for index, arg in enumerate(args):
+            if arg in ("-exec", "-execdir", "-ok", "-okdir"):
+                cmd = []
+                for a in args[index + 1:]:
+                    if a in (";", "+", "\\;"):
+                        break
+                    cmd.append(shlex.quote(a))
+                nested.append(" ".join(cmd))
+    return nested
+
+
+def _simple_reason(raw_words: list[str], depth: int) -> str | None:
+    raw_words = _strip_wrappers([restore(w) for w in raw_words[:1]] + raw_words[1:])
+    if not raw_words:
+        return None
+    words = [restore(w) for w in raw_words]
+    program = PurePath(words[0]).name
+    args = words[1:]
+    for inner in _nested_commands(program, args):
+        reason = bash_reason(inner, depth + 1)
+        if reason:
+            return reason
+    reason = _rm_reason(args) if program == "rm" else None
+    if reason:
+        return reason
+    if program == "git":
+        rest = args
+        while rest and rest[0].startswith("-"):  # git -C dir push ...
+            rest = rest[2:] if rest[0] in ("-C", "-c") else rest[1:]
+        if rest and rest[0] == "push":
+            reason = _push_reason(rest[1:])
+            if reason:
+                return reason
+    lister = program in LISTERS and not (program == "find" and any(a in FIND_ACTIONS for a in args))
+    for raw_word in _scanned_words(program, raw_words):
+        for candidate in _expand_braces(raw_word):
+            for raw_token in re.split(r"[<>=:]", candidate):
+                if not raw_token:
+                    continue
+                globbing = any(c in raw_token for c in "*?[")  # unquoted only
+                token = restore(raw_token)
+                if lister and any(c in token for c in "*?["):
+                    continue  # a pattern argument to ls/find/echo lists names only
+                pattern = secret_name(token)
+                if pattern:
+                    return f"touches a secret-shaped file ({pattern}): {token}"
+                if globbing and glob_could_match_secret(token):
+                    return f"glob {token} could match a secret-shaped file"
+    return None
+
+
 def bash_reason(command: str, depth: int = 0) -> str | None:
     if depth > MAX_DEPTH:
         return "command nesting too deep to check"
-    command = _strip_heredoc_bodies(command)
-    # Substitutions run even inside message text or echo arguments, and a
-    # backtick span can cross words, so find them in the raw string.
-    for sub in _substitutions(command):
-        inner = bash_reason(sub, depth + 1)
-        if inner:
-            return inner
-    for words in _commands(command):
-        words = _strip_wrappers(words)
-        if not words:
-            continue
-        program = PurePath(words[0]).name
-        args = words[1:]
-        inner_command = None
-        if program in SHELLS:
-            for index, arg in enumerate(args):
-                if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg):  # -c, -lc, -ec, ...
-                    rest = [a for a in args[index + 1:] if not a.startswith("-")]
-                    inner_command = rest[0] if rest else None
-                    break
-        elif program == "eval":
-            inner_command = " ".join(args)
-        if inner_command is not None:
-            inner = bash_reason(inner_command, depth + 1)
-            if inner:
-                return inner
-
-        if program == "rm":
-            reason = _rm_reason(args)
-            if reason:
-                return reason
-        if program == "git":
-            rest = args
-            while rest and rest[0].startswith("-"):  # git -C dir push ...
-                rest = rest[2:] if rest[0] in ("-C", "-c") else rest[1:]
-            if rest and rest[0] == "push":
-                reason = _push_reason(rest[1:])
-                if reason:
-                    return reason
-        for word in _scanned_words(program, words):
-            for token in re.split(r"[<>=:]", word):
-                pattern = secret_name(token) if token else None
-                if pattern:
-                    return f"touches a secret-shaped file ({pattern}): {token}"
-                if token and program not in LISTERS and any(c in token for c in "*?["):
-                    name = PurePath(token).name
-                    hits = [s for s in EXAMPLE_SECRETS if fnmatch.fnmatchcase(s, name) and (name.startswith(".") or not s.startswith("."))]
-                    if hits:
-                        return f"glob {token} could match a secret-shaped file ({hits[0]})"
+    try:
+        stripped, inner = scan(command)
+        commands = _commands(stripped)
+    except Unclear as exc:
+        return f"can't check this command safely ({exc})"
+    for sub in inner:
+        reason = bash_reason(sub, depth + 1)
+        if reason:
+            return reason
+    for words in commands:
+        reason = _simple_reason(words, depth)
+        if reason:
+            return reason
     return None
 
 
@@ -237,10 +421,8 @@ def decide(event: dict) -> str | None:
     if tool in PATH_TOOLS:
         for key in ("file_path", "notebook_path", "path"):
             value = tool_input.get(key)
-            if isinstance(value, str):
-                pattern = secret_name(value)
-                if pattern:
-                    return f"{tool} of a secret-shaped file ({pattern}) is denied in this repo"
+            if isinstance(value, str) and secret_name(value):
+                return f"{tool} of a secret-shaped file ({secret_name(value)}) is denied in this repo"
     if tool in SEARCH_TOOLS:
         for key in ("path", "pattern", "glob"):
             value = tool_input.get(key)

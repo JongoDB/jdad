@@ -41,6 +41,15 @@ def decision(event: dict) -> str:
     return out["permissionDecision"]
 
 
+def _nested_sh(levels: int) -> str:
+    import shlex
+
+    command = "ls"
+    for _ in range(levels):
+        command = "sh -c " + shlex.quote(command)
+    return command
+
+
 def bash(command: str) -> dict:
     return {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": command}}
 
@@ -98,10 +107,13 @@ def test_settings_hooks_point_at_executable_scripts() -> None:
         bash("cat *.md"),
         bash("bash -lc 'uv run pytest'"),
         bash('gh pr comment 1 --body "now \\$(cat .env) and \\`rm -rf x\\` are denied"'),  # escaped: never run
+        bash("python3 - <<'EOF'\nx = '$(cat .env)'\nEOF"),  # quoted heredoc body is literal
+        bash("find . -name '*.pem'"),  # listing names only
+        bash("cat *.md *.txt"),
     ],
     ids=["readme", "abs-src", "env-example-name", "pytest", "normal-push", "rm-file", "rm-r", "heredoc-body",
          "commit-message", "commit-message-eq", "gh-body", "echo-text", "ls-star", "cat-md-glob", "bash-lc-ok",
-         "escaped-substitution"],
+         "escaped-substitution", "quoted-heredoc-literal", "find-names", "cat-md-txt"],
 )
 def test_guard_allows(event: dict) -> None:
     assert decision(event) == "allow"
@@ -151,11 +163,26 @@ def test_guard_allows(event: dict) -> None:
         bash("bash -lc 'rm -rf build'"),
         bash("sh -ec 'git push -f'"),
         bash("eval 'rm -rf build'"),
-        bash("sh -c \"sh -c 'sh -c \\\"sh -c ls\\\"'\""),  # past the depth limit: deny
+        bash(_nested_sh(6)),  # past the nesting limit: deny
         bash("cat .e*"),
         bash("cat *.pem"),
         bash("cp ~/.ssh/id_* /tmp"),
         bash('echo "\\\\$(cat .env)"'),  # escaped backslash, then a live substitution
+        # third and fourth review rounds
+        bash("cat <<EOF\n$(cat .env)\nEOF"),  # unquoted heredoc bodies expand: scanned
+        bash("cat <<EOF\n'\n$(cat .env)\nEOF"),  # quotes in an unquoted body don't hide it
+        bash("cat <<<x\nrm -rf build\nx"),  # here-string, not a heredoc
+        bash('echo "a \\" <<\'EOF\'"\nrm -rf build\nEOF'),  # escaped quote: "<<" is still quoted
+        bash("echo '\\'$(cat .env)"),  # backslash is literal inside single quotes
+        bash("echo `cat .env \\\\`"),  # escaped backslash, then the closing backtick
+        bash("echo $(cat .env"),  # unclosed substitution: deny
+        bash("echo `cat x"),  # unclosed backtick: deny
+        bash("echo $(echo $(cat .env))"),  # nested
+        bash("cat *m"),  # suffix could match *.pem
+        bash("cat .{env,x}"),  # brace expansion to a secret name
+        bash("cat {a,id_rsa}"),
+        bash("find . -name '*.pem' -exec cat {} +"),
+        bash("find . -type d -exec rm -rf {} +"),
     ],
     ids=lambda e: (e["tool_input"].get("command") or e["tool_input"].get("file_path") or e["tool_name"])[:40],
 )
