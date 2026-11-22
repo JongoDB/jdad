@@ -19,7 +19,7 @@ Legend: **Needs Jon** = needs a decision, access, or money from Jon before or du
 
 IDs stay in file order, so the working order lives here. Set 2026-11-22 from the [red-team review](docs/reviews/2026-11-22-red-team.md#proposed-roadmap-order) and Jon's decisions that afternoon (brief 02):
 
-1. **P0.6, P0.7, P0.8**: origin lockdown, protect `main` and bot identities, CI and a portable `./verify`. Also the KB poisoning defences (red-team H4, JON-1341, PR #8), which feed P1.2.
+1. **P0.6, P0.7, P0.8, P0.10**: origin lockdown, protect `main` and bot identities, CI, a portable `./verify` and Dependabot, and the KB poisoning defences, including the runtime symlink fix (red-team H4 and M3, JON-1341, PR #8), which feed P1.2.
 2. **P0.9** operations basics.
 3. **P3.7** token through plugin `userConfig` (moved up: new hosts fail silently without it).
 4. **P1.2** widened (parser fixes M3, M4 on top of `jdad lint-kb`), then **P1.3**.
@@ -53,16 +53,21 @@ Deferred (Jon, 2026-11-22 3:16 PM ET): **P3.2** semantic search and the droplet 
   - Acceptance: `gh api repos/JongoDB/jdad/rules/branches/main` shows: PR required, no force push, no deletion, no bypass actors, and (after P0.8) the `verify` check required; a PR opened by a bot identity can't be approved by that identity; `JongoDB` credentials are revoked on every bot host (dates on the card).
   - Depends on: P0.6 and PR #8 merged (the scrub's gating steps). **Needs Jon:** make the repo public, then apply the ruleset; create the GitHub Apps and the machine user.
   - Decision (Jon, 2026-11-22 3:16 PM ET): the repo will be public (no proprietary or sensitive data; the KB is not confidential), `main` gets protected after that, and bots get their own GitHub identity.
-- [ ] **P0.8 CI runs and `./verify` is portable** (red-team H2 and M10, JON-1339, PRs #9 and #11)
+- [ ] **P0.8 CI runs, `./verify` is portable, dependencies get updated** (red-team H2, M8 and M10, JON-1339, PRs #9 and #11)
   - Goal: every PR has an automated pass/fail, and the builder's machine can produce one too.
-  - Deliverables: portable file-mode reads; `DOCKER_CONFIG` kept when the Docker test overrides `HOME`; the async fixture fix; `.python-version`; a skipped `claude plugin validate` fails under `CI`; the workflow installs a pinned Claude Code CLI.
-  - Acceptance: `./verify` ends `verify: ok` on macOS (OrbStack) and on Linux, outputs in the PR; a GitHub Actions `verify` run on a PR is green, with its URL on the card.
-  - Depends on: P0.7's repo switch (Actions is free once public). **Needs Jon:** the repo switch, or the Actions billing fix approved on 2026-11-22.
+  - Deliverables: portable file-mode reads; `DOCKER_CONFIG` kept when the Docker test overrides `HOME`; the async fixture fix; `.python-version`; a skipped `claude plugin validate` fails under `CI`; the workflow installs a pinned Claude Code CLI; **Dependabot (M8)**: `.github/dependabot.yml` for `uv`/pip, GitHub Actions and the Dockerfile's base images, weekly, grouped; `hatchling` pinned in `[build-system]` so the image build doesn't float; Dependabot vulnerability alerts turned on.
+  - Acceptance: `./verify` ends `verify: ok` on macOS (OrbStack) and on Linux, outputs in the PR; a GitHub Actions `verify` run on a PR is green, with its URL on the card; `dependabot.yml` validates against its schema in `./verify`; `gh api repos/JongoDB/jdad/vulnerability-alerts` returns 204; the first Dependabot PR (or its "up to date" run) is linked on the card.
+  - Depends on: P0.7's repo switch (Actions is free once public). **Needs Jon:** the repo switch, or the Actions billing fix approved on 2026-11-22; turning on vulnerability alerts (a repo setting).
 - [ ] **P0.9 Operations basics** (red-team M1, M2, M5, M6, M7, JON-1344)
   - Goal: the endpoint survives a bad commit, a noisy client and a lost droplet, and someone notices when it's down.
   - Deliverables: compose `mem_limit`, `pids_limit`, `cpus` and log rotation; `jdad-mcp --check` in the image build and before the swap in `update-docker.sh`; rollback resets the checkout to the previous SHA; NetBird documented as kept stopped; an external uptime check on `/healthz`; `docs/ops/rebuild-runbook.md`; a token rotation runbook.
   - Acceptance: the Docker suite asserts the limits and log options, refuses a commit that breaks only the KB before the swap (running image unchanged), and shows the checkout back on the previous SHA after a rollback; `jdad-mcp --check` has a failing test for a non-UTF-8 practice, a symlink and an unreadable source. Runtime: one rotation rehearsed on the droplet (old token 401, new token 200); without it the item stays open as runtime unverified.
   - Depends on: P0.8 (PR #9's token file). Decision (Jon, 2026-11-22 3:16 PM ET): keep the stopped NetBird stack and document it.
+- [ ] **P0.10 KB poisoning defences, including at runtime** (red-team H4 and M3, JON-1341, PR #8)
+  - Goal: text in `practices/` or `sources/` can't steer agents, and the server never serves a file from outside the KB.
+  - Deliverables: `jdad lint-kb` in `./verify` (agent-addressed text, URLs and shell in practices, hidden Unicode, comments, symlinks, non-`.md` files, file size); `get_source` output marked as quoted third-party material; the KB root never taken from the current directory; **the runtime symlink fix (Checker on #8, 0a5b7d0)**: files opened with `O_NOFOLLOW`, and symlinked files and directories, non-regular files, anything resolving outside the KB root, and files over 1 MiB skipped by every tool and resource; `docs/threat-model.md`; draft CODEOWNERS.
+  - Acceptance: `tests/test_lint.py` and `tests/test_kb_files.py` pass in `./verify`, including the `practices/hosts.md -> /etc/hosts` repro (refused by `get_practice`, absent from `list_topics`); `jdad lint-kb` is clean on the repo; the 5 lint bypasses from Checker's verdict on #8 each get a failing fixture (follow-up); a decision recorded on whether the hosted server requires `KB_ROOT` (follow-up).
+  - Depends on: nothing. P1.2 builds on it.
 
 ## Phase 1: One source of truth
 
