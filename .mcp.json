@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "jdad": {
+      "type": "http",
+      "url": "http://jdad.local:8765/mcp"
+    }
+  }
+}

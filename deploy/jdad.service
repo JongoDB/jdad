@@ -1,0 +1,23 @@
+[Unit]
+Description=JDAD MCP server (Jon-does-agentic-dev)
+Documentation=https://github.com/JongoDB/jdad
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jdad
+Group=jdad
+WorkingDirectory=/opt/jdad
+Environment=KB_ROOT=/opt/jdad
+EnvironmentFile=-/etc/jdad.env
+ExecStart=/opt/jdad/.venv/bin/jdad-mcp --http --host 0.0.0.0 --port 8765
+Restart=on-failure
+RestartSec=5
+
+# The process should not need a TTY; keep stdio for journald.
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
