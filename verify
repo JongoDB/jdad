@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 echo "==> bash -n deploy scripts"
-for script in deploy/common.sh deploy/install.sh deploy/update.sh; do
+for script in deploy/common.sh deploy/install.sh deploy/update.sh deploy/update-docker.sh; do
   bash -n "$script"
 done
 
@@ -14,6 +14,9 @@ uv run python tests/check_versions.py
 
 echo "==> deploy invocation and token parsing"
 bash tests/test_deploy_invocation.sh
+
+echo "==> docker image"
+bash tests/test_docker.sh
 
 echo "==> ruff"
 uv run ruff check src tests

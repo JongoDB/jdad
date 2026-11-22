@@ -4,13 +4,13 @@ Best practices pulled from videos and articles Jon sends, plus an MCP server and
 
 The MCP server is read-only. It never writes to the knowledge base and makes no network calls.
 
-The hosted URL used in the plugin and in the agent configs below is a placeholder until a real hostname is set:
+The hosted URL used in the plugin and in the agent configs below is:
 
 ```
-https://jdad.example/mcp
+https://jdad-mcp.jondevs.com/mcp
 ```
 
-The server itself listens on `127.0.0.1:8765`. Remote clients reach it through a Cloudflare Tunnel and a Cloudflare Access service token, plus `Authorization: Bearer`. `/healthz` is the liveness probe on the same origin (the Access policy should still allow whatever you use to probe it).
+JDAD runs as the only Docker container on a DigitalOcean droplet. Cloudflare's orange-cloud proxy terminates TLS for `https://jdad-mcp.jondevs.com`. There is no tunnel and no Access. Clients send `Authorization: Bearer`. `/healthz` is the liveness probe on the same origin.
 
 ## Layout
 
@@ -18,7 +18,7 @@ The server itself listens on `127.0.0.1:8765`. Remote clients reach it through a
 practices/                 deduped rules, one topic per file, tagged by area
 sources/                   one file per source: link, author, date, and a verbatim record
 src/jdad/                  stdio + streamable HTTP MCP server (official `mcp` Python SDK)
-deploy/                    systemd unit, env example, and an idempotent update script
+deploy/                    Docker Compose, update-docker.sh, and a leftover systemd unit
 .claude-plugin/            marketplace.json and plugin.json
 .mcp.json                  plugin MCP config (points at the hosted URL)
 commands/jdad.md           /jdad slash command
@@ -37,7 +37,7 @@ The official Python MCP SDK v2 renamed `FastMCP` to `MCPServer`. This server use
 1. Add `sources/YYYY-MM-DD-<slug>.md` with the link, author, date, format, and a verbatim write-up of the useful points.
 2. Fold new rules into `practices/<topic>.md`. Deduplicate against what is already there. Tag each section, and cite the source on each rule (for example `(src: breakingbreach #8)`).
 3. If you add a new topic file under `practices/`, add a matching skill at `skills/jdad-<topic>/SKILL.md` (one skill per practice file). If you add a rule that did not come from the source, label it as a KB addition, the way Rule zero is labeled in `practices/performance.md`.
-4. Bump the patch (or minor) version in `.claude-plugin/plugin.json` so Claude Code hosts get prompted to update. Keep `pyproject.toml` in sync when the server changes.
+4. Bump the patch (or minor) version in lockstep (`pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json`, and the marketplace plugin entry). `./verify` fails if they differ.
 5. Do not put secrets, tokens, or credentials in this repo.
 
 See [CLAUDE.md](CLAUDE.md) for the same instructions aimed at agents working in this repo.
@@ -59,7 +59,7 @@ jdad-mcp --http
 
 `KB_ROOT` overrides the content directory. It must point at a directory that contains `practices/` and `sources/`. If unset, the server uses a checkout of this repo when it can find one, otherwise the files bundled in the package.
 
-`JDAD_TOKEN` is optional on loopback. When set, every HTTP path except `/healthz` requires `Authorization: Bearer <token>`. Stdio does not use the token. Store the value in `/etc/jdad.env` (mode 0600) on the host; never commit it. `JDAD_ALLOWED_HOSTS` is a comma-separated list of public hostnames the MCP transport will accept in the `Host` header (loopback is always allowed; DNS-rebinding protection stays on). Set it to the tunnel hostname in the same env file.
+`JDAD_TOKEN` is optional on loopback. When set, every HTTP path except `/healthz` requires `Authorization: Bearer <token>`. Stdio does not use the token. The Docker deploy binds `0.0.0.0`, so a non-empty token is required (the image does not pass `--allow-no-auth`). Store the value in `~/.config/jdad/jdad.env` (mode 0600) on the droplet; never commit it. `JDAD_ALLOWED_HOSTS` is a comma-separated list of public hostnames the MCP transport will accept in the `Host` header (loopback is always allowed; DNS-rebinding protection stays on). For this host it is `jdad-mcp.jondevs.com`, which also allows Origin `https://jdad-mcp.jondevs.com` because Cloudflare forwards the original Host header.
 
 The default HTTP bind is `127.0.0.1`. Binding to a non-loopback address (`0.0.0.0`, a public IP, or a hostname other than `localhost`) without `JDAD_TOKEN` refuses to start unless you pass `--allow-no-auth`, which logs a loud warning.
 
@@ -81,7 +81,7 @@ Practice files are also MCP resources at `kb://practices/<name>` (for example `k
 
 ## Point a coding agent at the hosted server
 
-Replace `https://jdad.example/mcp` with the real hostname once it exists. Clients send `Authorization: Bearer` (`JDAD_TOKEN`) and the Cloudflare Access service-token headers `CF-Access-Client-Id` / `CF-Access-Client-Secret`.
+The default URL is `https://jdad-mcp.jondevs.com/mcp`. Clients send only `Authorization: Bearer` (`JDAD_TOKEN`). Do not put Cloudflare Access headers in the default config: if those env vars are unset, clients send the literal `${JDAD_CF_CLIENT_ID}` / `${JDAD_CF_CLIENT_SECRET}` text.
 
 ### Claude Code plugin (preferred)
 
@@ -90,15 +90,13 @@ Replace `https://jdad.example/mcp` with the real hostname once it exists. Client
 /plugin install jdad@jdad
 ```
 
-The plugin's `.mcp.json` already points at the placeholder `https://jdad.example/mcp` and sends:
+The plugin's `.mcp.json` already points at `https://jdad-mcp.jondevs.com/mcp` and sends:
 
 ```
 Authorization: Bearer ${JDAD_TOKEN}
-CF-Access-Client-Id: ${JDAD_CF_CLIENT_ID}
-CF-Access-Client-Secret: ${JDAD_CF_CLIENT_SECRET}
 ```
 
-Claude Code expands `${VAR}` from the environment when it starts the plugin (official plugin MCP config: `url` and `headers` support `${VAR}` and `${VAR:-default}`). Export `JDAD_TOKEN`, `JDAD_CF_CLIENT_ID`, and `JDAD_CF_CLIENT_SECRET` in the environment of the Claude Code process. If a variable is unset, Claude Code warns and may send the unexpanded `${VAR}` text, which the server or Access will reject. It also ships the `/jdad` slash command (`plan`, `review`, `perf`, `add <url>`) and a `jdad-performance` skill.
+Claude Code expands `${JDAD_TOKEN}` from the environment when it starts the plugin (official plugin MCP config: `url` and `headers` support `${VAR}` and `${VAR:-default}`). Export `JDAD_TOKEN` in the environment of the Claude Code process. If the variable is unset, Claude Code warns and may send the unexpanded `${JDAD_TOKEN}` text, which the server rejects with 401. It also ships the `/jdad` slash command (`plan`, `review`, `perf`, `add <url>`) and a `jdad-performance` skill.
 
 This repo is private, so the host that adds the marketplace needs git auth for `github.com/JongoDB/jdad`.
 
@@ -108,12 +106,8 @@ In `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.jdad]
-url = "https://jdad.example/mcp"
+url = "https://jdad-mcp.jondevs.com/mcp"
 bearer_token_env_var = "JDAD_TOKEN"
-
-[mcp_servers.jdad.env_http_headers]
-"CF-Access-Client-Id" = "JDAD_CF_CLIENT_ID"
-"CF-Access-Client-Secret" = "JDAD_CF_CLIENT_SECRET"
 ```
 
 ### Cursor
@@ -124,18 +118,25 @@ In `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (user):
 {
   "mcpServers": {
     "jdad": {
-      "url": "https://jdad.example/mcp",
+      "url": "https://jdad-mcp.jondevs.com/mcp",
       "headers": {
-        "Authorization": "Bearer ${JDAD_TOKEN}",
-        "CF-Access-Client-Id": "${JDAD_CF_CLIENT_ID}",
-        "CF-Access-Client-Secret": "${JDAD_CF_CLIENT_SECRET}"
+        "Authorization": "Bearer ${JDAD_TOKEN}"
       }
     }
   }
 }
 ```
 
-On a LAN or loopback setup (no Cloudflare Access), drop the `CF-Access-*` headers. If those env vars are unset, Claude Code may send the literal `${JDAD_CF_CLIENT_ID}` / `${JDAD_CF_CLIENT_SECRET}` text, which the server ignores but is confusing. A LAN `.mcp.json` looks like this:
+If you later put a Cloudflare Access Service Auth policy in front of the hostname, add these headers as an optional variant (and export the env vars). Leave them out unless Access is actually enabled:
+
+```
+CF-Access-Client-Id: ${JDAD_CF_CLIENT_ID}
+CF-Access-Client-Secret: ${JDAD_CF_CLIENT_SECRET}
+```
+
+In Codex that is `env_http_headers` mapping those header names to `JDAD_CF_CLIENT_ID` and `JDAD_CF_CLIENT_SECRET`.
+
+A local `.mcp.json` (stdio is also fine) looks like this:
 
 ```json
 {
@@ -153,9 +154,83 @@ On a LAN or loopback setup (no Cloudflare Access), drop the `CF-Access-*` header
 
 Stdio still works if you would rather run the server locally, including `uvx --from git+https://github.com/JongoDB/jdad jdad-mcp` (or `git+ssh://git@github.com/JongoDB/jdad`) with `gh auth` or an SSH key on the host.
 
-## Deploy on the LXC
+## Deploy on a droplet with Docker behind Cloudflare proxy
 
-`deploy/install.sh` is idempotent and is the supported first-time (and repair) path. Run it as root from the repo root (`sudo ./deploy/install.sh`) or by absolute path. It will:
+This is the supported deploy. JDAD is the only container on the droplet. Cloudflare's orange-cloud proxy terminates TLS for `https://jdad-mcp.jondevs.com` and forwards to the origin on port 80. There is no tunnel and no Access.
+
+The Cloudflare SSL/TLS mode for this setup is **Flexible**. The Cloudflare-to-origin hop is plain HTTP. Restrict port 80 to Cloudflare IP ranges (below) so the origin is not reachable in the clear from the public internet. The recommended hardening step is to switch to **Full** (or Full (strict)) and install a [Cloudflare Origin Certificate](https://developers.cloudflare.com/ssl/origin-configuration/origin-ca/) on the droplet, then serve TLS on the origin instead of plaintext port 80.
+
+### Firewall
+
+Create a DigitalOcean cloud firewall attached to the droplet:
+
+- Inbound TCP 80 (and 443 if you later move to Full) only from [Cloudflare IP ranges](https://www.cloudflare.com/ips/). Use both IPv4 and IPv6 lists.
+- Inbound SSH only from your own IPs.
+- Leave outbound open, or at least allow the origin to reach Cloudflare and GitHub.
+
+Do this in the DigitalOcean control panel (or `doctl compute firewall`); a host-local `ufw` rule is not a substitute for the cloud firewall.
+
+### Read-only deploy key
+
+The checkout on the droplet pulls this private repo as the deploy user (no passwordless sudo, no SSH agent required):
+
+1. On the droplet, as the deploy user:
+
+   ```bash
+   mkdir -p ~/.ssh
+   chmod 700 ~/.ssh
+   ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519_jdad -N "" -C "jdad-droplet-deploy"
+   ```
+
+2. Add the public key as a **read-only** deploy key on `JongoDB/jdad` (GitHub: repo Settings → Deploy keys, leave "Allow write access" unchecked).
+
+3. Pin `github.com` in `~/.ssh/known_hosts` from GitHub's [published SSH host keys](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints). Check the fingerprints against that page. Do not run `ssh-keyscan github.com`, and do not set `StrictHostKeyChecking accept-new`. See the known_hosts block under the leftover systemd install notes below for the published keys and expected SHA256 fingerprints.
+
+4. Install an ssh config entry so `git` uses that key without an agent:
+
+   ```
+   Host github.com
+     HostName github.com
+     User git
+     IdentityFile ~/.ssh/id_ed25519_jdad
+     IdentitiesOnly yes
+   ```
+
+   Mode `0600` on the key, the config, and (after pinning) `known_hosts`.
+
+### First install and updates
+
+```bash
+# as the deploy user, who can talk to the docker daemon
+git clone git@github.com:JongoDB/jdad.git
+cd jdad
+
+mkdir -p ~/.config/jdad
+chmod 700 ~/.config/jdad
+cp deploy/jdad.env.example ~/.config/jdad/jdad.env
+chmod 600 ~/.config/jdad/jdad.env
+# set a non-empty JDAD_TOKEN; leave JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com
+# do not commit this file
+
+docker compose -f deploy/docker-compose.yml up -d --build
+curl -fsS http://127.0.0.1/healthz
+```
+
+`deploy/docker-compose.yml` builds from the repo, publishes `80:8765`, restarts unless stopped, reads `~/.config/jdad/jdad.env`, sets `JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com`, and runs with a read-only root filesystem, `tmpfs` on `/tmp`, `cap_drop: [ALL]`, and `no-new-privileges`. The image runs as a non-root user and binds `0.0.0.0:8765` inside the container, so it will refuse to start without `JDAD_TOKEN`.
+
+Later updates (idempotent; fails loudly if pull, build, or healthz fails):
+
+```bash
+./deploy/update-docker.sh
+```
+
+That does `git pull --ff-only`, `docker compose up -d --build`, then curls `http://127.0.0.1/healthz` and requires `{"status":"ok"}`.
+
+## Alternative: systemd on a host
+
+This is not how the DigitalOcean droplet is run. `deploy/install.sh` remains for a host-installed layout.
+
+`deploy/install.sh` is idempotent and is the first-time (and repair) path for this layout. Run it as root from the repo root (`sudo ./deploy/install.sh`) or by absolute path. It will:
 
 - create the system user `jdad` if it does not exist (home `/var/lib/jdad`, nologin), or move an existing `jdad` home there
 - create `/var/lib/jdad/.ssh` at mode `0700` and install `deploy/ssh-config.example` as `/var/lib/jdad/.ssh/config` (mode `0600`) if that file is missing
@@ -227,7 +302,7 @@ sudo install -o jdad -g jdad -m 0644 /tmp/github_known_hosts /var/lib/jdad/.ssh/
 
 Install `uv` in a location the root path can see, typically `/usr/local/bin/uv`, before step 4. `update.sh` / `install.sh` also look at `command -v uv`, then `/usr/local/bin/uv` and `~jdad/.local/bin/uv` (`/var/lib/jdad/.local/bin/uv`), or an explicit `UV=/absolute/path/to/uv`.
 
-The unit binds to `127.0.0.1:8765` as user `jdad`, with `UV_PYTHON_PREFERENCE=only-system`, `NoNewPrivileges`, `ProtectSystem=strict`, `ReadOnlyPaths=/opt/jdad`, `PrivateTmp`, and `ProtectHome=true`. Set a non-empty `JDAD_TOKEN` in `/etc/jdad.env` before starting, and set `JDAD_ALLOWED_HOSTS` to the public hostname if you will reach the server through a tunnel that forwards that `Host` header. Expose the server with a Cloudflare Tunnel (below), not by binding to `0.0.0.0`.
+The unit binds to `127.0.0.1:8765` as user `jdad`, with `UV_PYTHON_PREFERENCE=only-system`, `NoNewPrivileges`, `ProtectSystem=strict`, `ReadOnlyPaths=/opt/jdad`, `PrivateTmp`, and `ProtectHome=true`. Set a non-empty `JDAD_TOKEN` in `/etc/jdad.env` before starting, and set `JDAD_ALLOWED_HOSTS` to the public hostname if a proxy forwards that `Host` header.
 
 `deploy/update.sh` is idempotent: it resolves `uv` as above, runs `git` as the `jdad` user (`git pull --ff-only`), syncs deps as `jdad`, restarts only when HEAD changes, and starts the service if it is down. Run it as root from the repo root (or a user that can `systemctl` this unit and `sudo -u jdad`):
 
@@ -235,7 +310,10 @@ The unit binds to `127.0.0.1:8765` as user `jdad`, with `UV_PYTHON_PREFERENCE=on
 sudo ./deploy/update.sh
 ```
 
-## Remote access via Cloudflare Tunnel
+## Optional: remote access via Cloudflare Tunnel
+
+This is not how `jdad-mcp.jondevs.com` is exposed (that hostname uses the orange-cloud proxy, with no tunnel and no Access).
+
 
 Keep the server on its default bind, `127.0.0.1:8765`. Do not publish that port on the LXC.
 
@@ -252,7 +330,7 @@ Clients send all three of:
 - `CF-Access-Client-Id: <JDAD_CF_CLIENT_ID>`
 - `CF-Access-Client-Secret: <JDAD_CF_CLIENT_SECRET>`
 
-The plugin `.mcp.json` and the Codex / Cursor examples already use those header names and the placeholder URL `https://jdad.example/mcp`. Leave that URL as a placeholder until the real hostname is chosen, then replace it in `.mcp.json` and in the agent configs, and put that hostname in `JDAD_ALLOWED_HOSTS` (unless you use `httpHostHeader`).
+If you use this path, add the Access headers as the optional variant in the agent configs, set `JDAD_ALLOWED_HOSTS` to the tunnel hostname (or use `httpHostHeader`), and point the client URL at that hostname.
 
 ## Development
 
@@ -261,4 +339,4 @@ uv sync
 ./verify
 ```
 
-`./verify` runs `bash -n` on each deploy script, a sandboxed invocation/token-parsing check (it drops privileges if run as root, and will not run a real `install.sh` against the host), ruff, pytest, `uv build`, and `claude plugin validate` when the Claude CLI is on `PATH` (it skips that last step with a note when it isn't). GitHub Actions is set up to run the same script on pull requests and on pushes to `main`, with `permissions: contents: read` and actions pinned to SHAs. That check is currently billing-blocked on this repo (red check; the job never starts), so local `./verify` is the proof until billing is fixed.
+`./verify` runs `bash -n` on each deploy script, a version-lockstep check, a sandboxed invocation/token-parsing check (it drops privileges if run as root, and will not run a real `install.sh` against the host), a Docker image smoke test when Docker is available (it skips with a note when it isn't), ruff, pytest, `uv build`, and `claude plugin validate` when the Claude CLI is on `PATH` (it skips that last step with a note when it isn't). GitHub Actions is set up to run the same script on pull requests and on pushes to `main`, with `permissions: contents: read` and actions pinned to SHAs. That check is currently billing-blocked on this repo (red check; the job never starts), so local `./verify` is the proof until billing is fixed.

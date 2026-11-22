@@ -490,3 +490,15 @@ def test_public_host_header_via_http_proxy(
     finally:
         allowed_proxy.stop()
         allowed_server.stop()
+
+
+def test_allowed_hosts_include_public_origin(monkeypatch: pytest.MonkeyPatch) -> None:
+    from jdad.server import transport_security_settings
+
+    monkeypatch.setenv("JDAD_ALLOWED_HOSTS", "jdad-mcp.jondevs.com")
+    settings = transport_security_settings()
+    assert settings.enable_dns_rebinding_protection is True
+    assert "jdad-mcp.jondevs.com" in settings.allowed_hosts
+    assert "jdad-mcp.jondevs.com:*" in settings.allowed_hosts
+    assert "https://jdad-mcp.jondevs.com" in settings.allowed_origins
+    assert "https://jdad-mcp.jondevs.com:*" in settings.allowed_origins

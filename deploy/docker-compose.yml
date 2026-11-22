@@ -1,0 +1,26 @@
+# JDAD on the droplet: the only container, published on port 80 so
+# Cloudflare's orange-cloud proxy can reach it. Run as the deploy user
+# from the repo checkout (no passwordless sudo).
+#
+# Env file (mode 0600): ~/.config/jdad/jdad.env
+# Must set a non-empty JDAD_TOKEN. JDAD_ALLOWED_HOSTS is set below.
+
+services:
+  jdad:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    ports:
+      - "80:8765"
+    restart: unless-stopped
+    env_file:
+      - ${HOME}/.config/jdad/jdad.env
+    environment:
+      JDAD_ALLOWED_HOSTS: jdad-mcp.jondevs.com
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
