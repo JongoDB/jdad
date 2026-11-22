@@ -59,6 +59,19 @@ REDIRECTS = (">", ">>", "<", "1>", "2>", "&>", ">|")
 WORD_START = " \t\n;|&("
 
 
+def _word_start(command: str, i: int) -> bool:
+    """Does command[i] start a word? Not if the separator before it is
+    escaped (an escaped space, or a backslash-newline continuation)."""
+    if i == 0:
+        return True
+    if command[i - 1] not in WORD_START:
+        return False
+    backslashes, j = 0, i - 2
+    while j >= 0 and command[j] == "\\":
+        backslashes, j = backslashes + 1, j - 1
+    return backslashes % 2 == 0
+
+
 class Unclear(Exception):
     """The scanner can't tell what the shell would run: deny."""
 
@@ -166,12 +179,12 @@ def scan(command: str) -> tuple[str, list[str]]:
             quote = c
             out.append(c)
             i += 1
-        elif c == "#" and (i == 0 or command[i - 1] in WORD_START):
+        elif c == "#" and _word_start(command, i):
             # A comment runs to the end of the line; nothing in it is run,
             # and a "<<" in it doesn't start a heredoc.
             end = command.find("\n", i)
             i = n if end < 0 else end
-        elif command.startswith("((", i) and (i == 0 or command[i - 1] in WORD_START):
+        elif command.startswith("((", i) and _word_start(command, i):
             # Arithmetic: "<<" is a shift here, not a heredoc.
             end = _match_paren(command, i)
             inner.extend(_body_substitutions(command[i + 2:end]))
@@ -208,7 +221,9 @@ def _delimiter(command: str, i: int) -> tuple[str, bool, int]:
                 j += 2 if command[j] == "\\" else 1
             if j >= n:
                 raise Unclear("unclosed quote in a heredoc delimiter")
-            word.append(command[i + 1:j].replace("\\", ""))
+            if "\\" in command[i + 1:j]:
+                raise Unclear("backslash in a quoted heredoc delimiter")
+            word.append(command[i + 1:j])
             quoted, i = True, j + 1
         elif c == "\\":
             word.append(command[i + 1:i + 2])
@@ -262,6 +277,7 @@ def _commands(command: str) -> list[tuple[list[str], bool]]:
     lex = shlex.shlex(command, posix=True, punctuation_chars=OPERATOR_CHARS)
     lex.whitespace = " \t\r"
     lex.whitespace_split = True
+    lex.commenters = ""  # scan() already removed real comments; "#" here is text
     try:
         tokens = list(lex)
     except ValueError as exc:
@@ -450,7 +466,9 @@ def _simple_reason(raw_words: list[str], depth: int, piped: bool = False) -> str
     return None
 
 
-def bash_reason(command: str, depth: int = 0) -> str | None:
+def bash_reason(command: str, depth: int = 0, consumed: bool = False) -> str | None:
+    """consumed: the command's output is used (inside $(...) or `...`), so a
+    lister's names feed another command and get no exemption."""
     if depth > MAX_DEPTH:
         return "command nesting too deep to check"
     try:
@@ -459,11 +477,11 @@ def bash_reason(command: str, depth: int = 0) -> str | None:
     except Unclear as exc:
         return f"can't check this command safely ({exc})"
     for sub in inner:
-        reason = bash_reason(sub, depth + 1)
+        reason = bash_reason(sub, depth + 1, consumed=True)
         if reason:
             return reason
     for words, piped in commands:
-        reason = _simple_reason(words, depth, piped)
+        reason = _simple_reason(words, depth, piped or consumed)
         if reason:
             return reason
     return None
