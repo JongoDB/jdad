@@ -490,3 +490,16 @@ def test_small_capitals_word_in_a_source_is_a_homoglyph(tmp_path: Path) -> None:
     root = make_kb(tmp_path, {"sources/2026-01-01-x.md": f"# X\n- {SMALL_CAPS_IGNORE} that\n"})
     found = checks(root)
     assert ("homoglyph", "sources/2026-01-01-x.md", 2) in found
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "- `<x-y !onclick=go()>` (src: x #2)\n",  # attribute names may start with almost anything
+        "- `<x-y \"a\" onclick=go()>` (src: x #2)\n",
+        "- Speed. <x-widget/\n  onerror=alert(1)> (src: x #2)\n",  # name and slash at end of line
+    ],
+)
+def test_html_attribute_rule_follows_the_tokenizer(tmp_path: Path, body: str) -> None:
+    root = make_kb(tmp_path, {"practices/clean.md": CLEAN_PRACTICE + body})
+    assert "html" in [c for c, p, _ in checks(root) if p == "practices/clean.md"], checks(root)
