@@ -94,10 +94,11 @@ Goal: video or article → source → practice, with dedupe, tags and citations,
 
 Goal: richer, still read-only and offline tools. ([ADR 0003](docs/adr/0003-stdio-plus-hosted-http-mcp.md))
 
-- [ ] **P3.1 Ranked lexical search**
+- [x] **P3.1 Ranked lexical search**
   - Deliverables: BM25 (stdlib) over rules; `search_practices(query, tags?, limit=10)` returns rule ID, topic, heading, snippet, score; a `concise|detailed` response format per Anthropic's tool-writing guidance.
   - Acceptance: a fixture KB and expected top-3 rule IDs for 10 queries are committed; tests assert those IDs in order; with `limit=10` and `concise`, the UTF-8 response is ≤ 2048 bytes.
   - Depends on: P1.2.
+  - Evidence (2026-11-22, JON-1346): `tests/fixtures/search/` (21 rules) and `queries.json` (10 queries, expected top-3 IDs in order); `tests/test_search.py` asserts them; with `limit=10` and `concise`, the UTF-8 JSON response is within 2048 bytes on the fixture and on the repo KB.
 - [ ] **P3.2 Optional semantic search**
   - Deliverables: `jdad[semantic]` extra with a small local embedding model; index built at deploy or update time, not per request; `search_practices(mode="semantic")` falls back to lexical when the extra isn't installed.
   - Acceptance: server starts and the full suite passes without the extra; with it, on ≥ 20 committed, labeled paraphrase queries, semantic recall@5 ≥ lexical recall@5 + 0.10; peak RSS under a fixed 100-request workload is recorded in the PR and is ≤ the memory budget Jon approves on the card.

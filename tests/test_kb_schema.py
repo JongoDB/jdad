@@ -195,11 +195,9 @@ def test_checklist_lines_carry_ids_and_citations() -> None:
 
 
 def test_search_hits_carry_structured_rules() -> None:
-    hits = KnowledgeBase(REPO_ROOT).search_practices("N+1", tag="db")
-    rules = [rule for hit in hits for rule in hit["rules"]]
-    n_plus_one = next(r for r in rules if r["id"] == "perf.db.n-plus-one")
-    assert n_plus_one == {
-        "id": "perf.db.n-plus-one",
+    hits = KnowledgeBase(REPO_ROOT).search_practices("N+1", tag="db", response_format="detailed")
+    n_plus_one = next(h for h in hits if h["id"] == "perf.db.n-plus-one")
+    assert {k: n_plus_one[k] for k in ("text", "tags", "citation", "origin", "applies_when")} == {
         "text": "Kill N+1 (batch/join).",
         "tags": ["db"],
         "citation": "src: breakingbreach #8",

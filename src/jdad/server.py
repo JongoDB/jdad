@@ -6,7 +6,7 @@ import argparse
 import hmac
 import logging
 import os
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
@@ -51,13 +51,22 @@ def list_topics() -> list[dict[str, Any]]:
 
 
 @mcp.tool(annotations=READ_ONLY)
-def search_practices(query: str, tag: str | None = None) -> list[dict[str, Any]]:
-    """Keyword search over practice sections: matched file, heading, body, and the section's rules
-    (each with id, text, tags, citation, origin, applies_when).
+def search_practices(
+    query: str,
+    tags: list[str] | None = None,
+    limit: int = 10,
+    response_format: Literal["concise", "detailed"] = "concise",
+    tag: str | None = None,
+) -> list[dict[str, Any]]:
+    """Search the KB's rules, best match first (BM25 over rule text, applies-when, heading, tags and ID).
 
-    Optional tag filter: frontend, backend, db, infra, observability, or testing.
+    Each hit has the rule `id`, `topic`, section `heading`, a short `snippet` and its `score`.
+    `response_format="detailed"` adds the full `text`, `tags`, `citation`, `origin`,
+    `applies_when` and `file`; use it only when you'll quote the rule. Optional `tags` filter:
+    frontend, backend, db, infra, observability, testing. `limit` is 1-50 (default 10).
+    `tag` is the older single-tag form of `tags`.
     """
-    return _kb().search_practices(query, tag=tag)
+    return _kb().search_practices(query, tag=tag, tags=tags, limit=limit, response_format=response_format)
 
 
 @mcp.tool(annotations=READ_ONLY)

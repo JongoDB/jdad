@@ -566,42 +566,22 @@ class KnowledgeBase:
     def get_source(self, source_id: str) -> str:
         return read_kb_file(self._resolve_file(self.sources_dir, source_id, kind="source"))
 
-    def search_practices(self, query: str, tag: str | None = None) -> list[dict]:
-        needle = query.strip().lower()
-        if not needle:
-            return []
-        wanted = tag.strip().lower() if tag and tag.strip() else None
-        hits: list[dict] = []
-        for doc in self.practices():
-            if wanted is None:
-                intro = f"{doc.title}\n{doc.preamble}".lower()
-                if needle in intro:
-                    hits.append(
-                        {
-                            "topic": doc.topic,
-                            "file": doc.relpath,
-                            "heading": doc.title,
-                            "tags": doc.tags,
-                            "body": doc.preamble,
-                            "rules": [],
-                        }
-                    )
-            for section in doc.sections:
-                if wanted and wanted not in {t.lower() for t in section.tags}:
-                    continue
-                haystack = f"{section.heading}\n{' '.join(section.tags)}\n{section.body}"
-                if needle in haystack.lower():
-                    hits.append(
-                        {
-                            "topic": doc.topic,
-                            "file": doc.relpath,
-                            "heading": section.heading,
-                            "tags": list(section.tags),
-                            "body": section.body.strip(),
-                            "rules": [rule.as_dict() for rule in section.rules],
-                        }
-                    )
-        return hits
+    def search_practices(
+        self,
+        query: str,
+        tag: str | None = None,
+        *,
+        tags: list[str] | None = None,
+        limit: int = 10,
+        response_format: str = "concise",
+    ) -> list[dict]:
+        """BM25-ranked rules (jdad.search). `tag` is the old single-tag form."""
+        from jdad.search import search
+
+        wanted = list(tags or [])
+        if tag and tag.strip():
+            wanted.append(tag)
+        return search(self.practices(), query, tags=wanted, limit=limit, response_format=response_format)
 
     def get_checklist(self, tags: list[str] | None = None) -> str:
         wanted = {t.strip().lower() for t in (tags or []) if t and t.strip()}

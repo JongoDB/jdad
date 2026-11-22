@@ -1,0 +1,13 @@
+{
+  "_note": "Expected top-3 rule IDs, in order, for each query against tests/fixtures/search (roadmap P3.1). Fewer than 3 when fewer rules match.",
+  "N+1 query": ["data.queries.n-plus-one", "data.queries.indexes", "data.queries.select-columns"],
+  "cursor pagination": ["api.pagination.cursor", "api.pagination.page-size"],
+  "retry with backoff": ["api.resilience.retry-backoff", "api.resilience.timeouts", "api.resilience.idempotency-keys"],
+  "image formats": ["fe.loading.image-formats", "fe.loading.lazy-images"],
+  "index on a large table": ["data.migrations.concurrent-index", "data.queries.indexes"],
+  "cache invalidation": ["data.cache.invalidate-on-write", "data.cache.ttl"],
+  "keyboard accessibility": ["fe.a11y.keyboard", "fe.a11y.axe-ci"],
+  "javascript bundle size": ["fe.bundles.size-budget", "fe.bundles.code-split", "api.pagination.page-size"],
+  "stack traces in errors": ["api.errors.no-stack-traces", "api.errors.problem-json"],
+  "timeout for outbound calls": ["api.resilience.timeouts", "api.resilience.idempotency-keys", "api.resilience.retry-backoff"]
+}

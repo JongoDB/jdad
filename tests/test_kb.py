@@ -30,9 +30,9 @@ def test_list_topics_includes_performance() -> None:
 def test_search_and_checklist_filter_by_tag() -> None:
     kb = KnowledgeBase(REPO_ROOT)
     hits = kb.search_practices("N+1", tag="db")
-    assert hits
+    assert hits and hits[0]["id"] == "perf.db.n-plus-one"
     assert all(hit["heading"] for hit in hits)
-    assert any("N+1" in hit["body"] for hit in hits)
+    assert "N+1" in hits[0]["snippet"]
     assert not kb.search_practices("N+1", tag="frontend")
 
     checklist = kb.get_checklist(["frontend"])

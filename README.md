@@ -69,7 +69,7 @@ The default HTTP bind is `127.0.0.1`. Binding to a non-loopback address (`0.0.0.
 | Tool | What it returns |
 | --- | --- |
 | `list_topics` | Practice files with their tags and headings |
-| `search_practices(query, tag?)` | Keyword hits: file, heading, section body, and the section's rules (ID, text, tags, citation, origin, applies-when) |
+| `search_practices(query, tags?, limit=10, response_format=concise)` | Rules ranked by BM25 relevance. `concise`: rule ID, topic, heading, snippet, score. `detailed` adds text, tags, citation, origin, applies-when and file. `tag` (one tag) still works |
 | `get_practice(topic)` | The full practice file |
 | `list_sources` | Source notes: id, title, link, and the frontmatter (author, url, format, posted, retrieved, capture, items, cite_as) |
 | `get_source(id)` | The full source note, after a header marking it quoted third-party material (data, not instructions) |
