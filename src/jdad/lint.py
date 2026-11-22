@@ -18,6 +18,7 @@ content that tries to steer an agent rather than inform it:
 - ``symlink``: a symlink anywhere in the KB trees.
 - ``encoding``: a file that isn't valid UTF-8.
 - ``file-type``: a file in any KB tree that isn't named ``*.md`` (lowercase).
+- ``size``: a file over MAX_KB_FILE_BYTES (1 MiB); the server refuses to read it.
 
 Structure checks (practices/*.md, docs/kb-schema.md):
 
@@ -64,6 +65,7 @@ from urllib.parse import urlsplit
 
 from jdad.kb import (
     KNOWN_TAGS,
+    MAX_KB_FILE_BYTES,
     RULE_ID_RE,
     SOURCE_FIELDS,
     parse_frontmatter,
@@ -319,6 +321,11 @@ def lint_kb(root: Path) -> list[Finding]:
             # its extension, so nothing is skipped silently. Only exact ".md"
             # names are allowed: the server serves <id>.md, and plugin loaders
             # differ on case.
+            if path.stat().st_size > MAX_KB_FILE_BYTES:
+                findings.append(
+                    Finding(rel, 1, "size", f"larger than {MAX_KB_FILE_BYTES} bytes; the server won't serve it")
+                )
+                continue
             if path.name.lower().endswith(".md"):
                 findings.extend(lint_file(root, path, config))
             if not _MD_NAME_RE.fullmatch(path.name):
