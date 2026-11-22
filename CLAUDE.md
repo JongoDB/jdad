@@ -33,7 +33,7 @@ When Jon (or anyone) sends a video, article, or thread to mine:
 - Stack: official `mcp` Python SDK v2 (`MCPServer`, the successor to `FastMCP`), stdio entry point `jdad-mcp`, HTTP via `--http`.
 - Keep it dependency-light and offline. No network calls from the server.
 - Practice files must stay available as `kb://practices/<name>` resources.
-- Keep the `apply-kb` prompt, `kb_version` (git SHA plus newest entry date; git is invoked with `--no-optional-locks`), `/healthz` (`{"status": "ok"}` only), and optional bearer auth from `JDAD_TOKEN`. The plugin `.mcp.json` must send `Authorization: Bearer ${JDAD_TOKEN}` plus Cloudflare Access service-token headers `CF-Access-Client-Id: ${JDAD_CF_CLIENT_ID}` and `CF-Access-Client-Secret: ${JDAD_CF_CLIENT_SECRET}` (Claude Code expands `${VAR}` from the environment). The URL is the placeholder `https://jdad.example/mcp` until a real hostname is set.
+- Keep the `apply-kb` prompt, `kb_version` (git SHA plus newest entry date; git is invoked with `--no-optional-locks`), `/healthz` (`{"status": "ok"}` only), and optional bearer auth from `JDAD_TOKEN`. The plugin `.mcp.json` must send `Authorization: Bearer ${JDAD_TOKEN}` only, with URL `https://jdad-mcp.jondevs.com/mcp` (Claude Code expands `${JDAD_TOKEN}` from the environment). Do not add `CF-Access-*` headers to the default config; unset vars are sent as the literal `${...}` text. Those headers are an optional documented variant if Access is used later.
 - Tests in `tests/` start the server in-process (`mcp.Client(mcp)`), over stdio (`uv run jdad-mcp`), and over HTTP (`create_http_app()`). Update them when you add a tool. Run `./verify` before you push.
 
 ## What not to do
