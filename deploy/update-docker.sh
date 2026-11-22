@@ -215,7 +215,18 @@ rollback() {
     return 1
   fi
   echo "jdad: health check failed; rolling back to $prev" >&2
-  JDAD_GIT_SHA="$prev_sha" "${COMPOSE[@]}" up -d --no-build --force-recreate
+  # Images built before the token file (no io.jdad.token-file label) read
+  # only JDAD_TOKEN. Give them the value from the token file, for this
+  # container only (deploy/compose.legacy-token.yml explains the trade-off).
+  local label
+  label="$(docker image inspect -f '{{ index .Config.Labels "io.jdad.token-file" }}' "$prev" 2>/dev/null || true)"
+  if [[ "$label" != 1 ]]; then
+    echo "jdad: $prev predates the token file; passing JDAD_TOKEN from $TOKEN_FILE to it for this rollback" >&2
+    JDAD_TOKEN="$(<"$TOKEN_FILE")" JDAD_GIT_SHA="$prev_sha" \
+      "${COMPOSE[@]}" -f "$HERE/compose.legacy-token.yml" up -d --no-build --force-recreate
+  else
+    JDAD_GIT_SHA="$prev_sha" "${COMPOSE[@]}" up -d --no-build --force-recreate
+  fi
   if ! wait_for_health; then
     echo "jdad: rollback to $prev also failed health check" >&2
     return 1
