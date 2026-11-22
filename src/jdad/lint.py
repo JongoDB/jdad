@@ -146,7 +146,9 @@ _HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])")
 # Only harmless unknown tags in code (`List<String>`, `<T>`) are exempt.
 # Browsers accept "/" between attributes (<x/src=a/onerror=b>), and a tag
 # can continue on the next line, so a tag name at the end of a line counts.
-_HTML_ATTR_TAG_RE = re.compile(r"<[A-Za-z][A-Za-z0-9-]*(?:[\s/]+[A-Za-z_:][\w:.-]*\s*(=|/?>|\s|/|$)|\s*$)")
+# Shaped like the HTML tokenizer: after the tag name, whitespace or "/"
+# then anything but ">" starts an attribute (whatever its first character).
+_HTML_ATTR_TAG_RE = re.compile(r"<[A-Za-z][A-Za-z0-9-]*(?:[\s/]+[^\s/>]|[\s/]*$)")
 _HTML_ELEMENT_RE = re.compile(
     r"</?(a|abbr|audio|b|base|bdo|blink|br|button|canvas|code|del|details|dialog|div|em|embed|"
     r"font|form|frame|frameset|i|iframe|img|input|ins|label|link|mark|marquee|math|meta|"
