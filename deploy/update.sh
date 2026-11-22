@@ -4,9 +4,9 @@
 # HEAD changes, and start the service if it is not already running.
 set -euo pipefail
 
-cd "$(dirname "$0")"
+HERE="$(cd "$(dirname "$0")" && pwd)"
 # shellcheck source=common.sh
-source "$(dirname "$0")/common.sh"
+source "$HERE/common.sh"
 
 UV="$(resolve_uv)"
 
@@ -21,7 +21,7 @@ run_as_jdad git -C "$JDAD_ROOT" pull --ff-only
 after="$(run_as_jdad git -C "$JDAD_ROOT" rev-parse HEAD)"
 
 sync_deps() {
-  run_as_jdad env UV_PYTHON_PREFERENCE=only-system "$UV" --directory "$JDAD_ROOT" sync --frozen --no-dev
+  run_as_jdad env HOME="$(jdad_home)" UV_PYTHON_PREFERENCE=only-system "$UV" --directory "$JDAD_ROOT" sync --frozen --no-dev
 }
 
 service_active() {

@@ -5,7 +5,12 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 echo "==> bash -n deploy scripts"
-bash -n deploy/common.sh deploy/install.sh deploy/update.sh
+for script in deploy/common.sh deploy/install.sh deploy/update.sh; do
+  bash -n "$script"
+done
+
+echo "==> deploy invocation and token parsing"
+bash tests/test_deploy_invocation.sh
 
 echo "==> ruff"
 uv run ruff check src tests

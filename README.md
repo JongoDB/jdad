@@ -128,29 +128,46 @@ Stdio still works if you would rather run the server locally, including `uvx --f
 
 ## Deploy on the LXC
 
-`deploy/install.sh` is idempotent and is the supported first-time (and repair) path. Run it as root. It will:
+`deploy/install.sh` is idempotent and is the supported first-time (and repair) path. Run it as root from the repo root (`sudo ./deploy/install.sh`) or by absolute path. It will:
 
-- create the system user `jdad` if it does not exist (home `/opt/jdad`, nologin)
-- clone the repo into `/opt/jdad` as that user (`sudo -u jdad git clone`), and `chown` the checkout to `jdad` if it already exists
-- run `uv sync --frozen --no-dev` as `jdad` with `UV_PYTHON_PREFERENCE=only-system`, so the venv is `/opt/jdad/.venv` (not under `/root` or `/home`)
+- create the system user `jdad` if it does not exist (home `/var/lib/jdad`, nologin), or move an existing `jdad` home there
+- create `/var/lib/jdad/.ssh` at mode `0700` and install `deploy/ssh-config.example` as `/var/lib/jdad/.ssh/config` (mode `0600`) if that file is missing
+- clone the repo into `/opt/jdad` as that user (`sudo -u jdad git clone`), and `chown` the checkout to `jdad` if it already exists. The home directory is outside the checkout, so a deploy key in `/var/lib/jdad/.ssh` does not make `/opt/jdad` non-empty, and the uv cache lands in `/var/lib/jdad/.cache` rather than in the KB tree
+- run `uv sync --frozen --no-dev` as `jdad` with `HOME=/var/lib/jdad` and `UV_PYTHON_PREFERENCE=only-system`, so the venv is `/opt/jdad/.venv` (not under `/root` or `/home`)
 - install `/etc/jdad.env` at mode `0600` with the `JDAD_TOKEN=` placeholder only, and leave an existing env file alone
-- install and `enable` the systemd unit. It starts the service only when `JDAD_TOKEN` is already set; otherwise it prints the command to start after you fill in the token
+- install and `enable` the systemd unit. It starts the service only when `JDAD_TOKEN` is a non-empty value (not `JDAD_TOKEN=` or `JDAD_TOKEN=""`); otherwise it prints the command to start after you fill in the token
 
-The `jdad` user needs git access to this private repo (a deploy key under `/opt/jdad/.ssh`, or equivalent). Install `uv` in a location the root path can see, typically `/usr/local/bin/uv`. `update.sh` / `install.sh` also look at `command -v uv`, then `/usr/local/bin/uv` and `~jdad/.local/bin/uv`, or an explicit `UV=/absolute/path/to/uv`.
-
-The unit binds to `0.0.0.0:8765` as user `jdad`, with `UV_PYTHON_PREFERENCE=only-system`, `NoNewPrivileges`, `ProtectSystem=strict`, `ReadOnlyPaths=/opt/jdad`, `PrivateTmp`, and `ProtectHome=true`. Set `JDAD_TOKEN` in `/etc/jdad.env` before starting; without it the process will refuse that bind.
+The `jdad` user needs git access to this private repo. `sudo -u jdad` has no SSH agent, so use a deploy key and an ssh config entry, not a forwarded agent:
 
 ```bash
-# from a checkout of this repo, or after copying deploy/ onto the host
+sudo install -o jdad -g jdad -m 0700 -d /var/lib/jdad/.ssh
+sudo install -o jdad -g jdad -m 0600 /path/to/jdad_deploy_key /var/lib/jdad/.ssh/id_ed25519
+sudo install -o jdad -g jdad -m 0600 deploy/ssh-config.example /var/lib/jdad/.ssh/config
+# The example config is:
+#   Host github.com
+#     HostName github.com
+#     User git
+#     IdentityFile /var/lib/jdad/.ssh/id_ed25519
+#     IdentitiesOnly yes
+```
+
+Put the key in place before the first successful clone (or re-run `install.sh` after adding it). Install `uv` in a location the root path can see, typically `/usr/local/bin/uv`. `update.sh` / `install.sh` also look at `command -v uv`, then `/usr/local/bin/uv` and `~jdad/.local/bin/uv` (`/var/lib/jdad/.local/bin/uv`), or an explicit `UV=/absolute/path/to/uv`.
+
+The unit binds to `0.0.0.0:8765` as user `jdad`, with `UV_PYTHON_PREFERENCE=only-system`, `NoNewPrivileges`, `ProtectSystem=strict`, `ReadOnlyPaths=/opt/jdad`, `PrivateTmp`, and `ProtectHome=true`. Set a non-empty `JDAD_TOKEN` in `/etc/jdad.env` before starting; without it the process will refuse that bind.
+
+```bash
+# from the repo root
 sudo ./deploy/install.sh
+# or by absolute path:
+# sudo /opt/jdad/deploy/install.sh
 # or: sudo JDAD_REPO=git@github.com:JongoDB/jdad.git ./deploy/install.sh
 sudo chmod 0600 /etc/jdad.env
-sudo editor /etc/jdad.env   # set JDAD_TOKEN; do not commit this file
+sudo editor /etc/jdad.env   # set a non-empty JDAD_TOKEN; do not commit this file
 sudo systemctl start jdad.service
 curl -fsS http://127.0.0.1:8765/healthz
 ```
 
-`deploy/update.sh` is idempotent: it resolves `uv` as above, runs `git` as the `jdad` user (`git pull --ff-only`), syncs deps as `jdad`, restarts only when HEAD changes, and starts the service if it is down. Run it as root (or a user that can `systemctl` this unit and `sudo -u jdad`):
+`deploy/update.sh` is idempotent: it resolves `uv` as above, runs `git` as the `jdad` user (`git pull --ff-only`), syncs deps as `jdad`, restarts only when HEAD changes, and starts the service if it is down. Run it as root from the repo root (or a user that can `systemctl` this unit and `sudo -u jdad`):
 
 ```bash
 sudo ./deploy/update.sh
