@@ -97,9 +97,11 @@ def test_settings_hooks_point_at_executable_scripts() -> None:
         bash("ls *"),
         bash("cat *.md"),
         bash("bash -lc 'uv run pytest'"),
+        bash('gh pr comment 1 --body "now \\$(cat .env) and \\`rm -rf x\\` are denied"'),  # escaped: never run
     ],
     ids=["readme", "abs-src", "env-example-name", "pytest", "normal-push", "rm-file", "rm-r", "heredoc-body",
-         "commit-message", "commit-message-eq", "gh-body", "echo-text", "ls-star", "cat-md-glob", "bash-lc-ok"],
+         "commit-message", "commit-message-eq", "gh-body", "echo-text", "ls-star", "cat-md-glob", "bash-lc-ok",
+         "escaped-substitution"],
 )
 def test_guard_allows(event: dict) -> None:
     assert decision(event) == "allow"
@@ -153,6 +155,7 @@ def test_guard_allows(event: dict) -> None:
         bash("cat .e*"),
         bash("cat *.pem"),
         bash("cp ~/.ssh/id_* /tmp"),
+        bash('echo "\\\\$(cat .env)"'),  # escaped backslash, then a live substitution
     ],
     ids=lambda e: (e["tool_input"].get("command") or e["tool_input"].get("file_path") or e["tool_name"])[:40],
 )

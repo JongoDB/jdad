@@ -74,8 +74,10 @@ def _strip_heredoc_bodies(command: str) -> str:
 
 def _substitutions(command: str) -> list[str]:
     """Commands inside $(...), <(...), >(...) or backticks."""
-    inner = re.findall(r"[$<>]\(([^()]*(?:\([^()]*\)[^()]*)*)\)", command)
-    inner += re.findall(r"`([^`]*)`", command)
+    # A backslash-escaped "\\$(" or "\\`" is literal text, never run.
+    # An even run of backslashes before it ("\\\\$(") leaves it live.
+    inner = re.findall(r"(?<!\\)(?:\\\\)*[$<>]\(([^()]*(?:\([^()]*\)[^()]*)*)\)", command)
+    inner += re.findall(r"(?<!\\)(?:\\\\)*`((?:[^`\\]|\\.)*)(?<!\\)`", command)
     return inner
 
 
