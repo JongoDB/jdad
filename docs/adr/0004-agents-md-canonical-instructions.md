@@ -1,6 +1,6 @@
 # 0004: AGENTS.md is the canonical instructions file; CLAUDE.md imports it
 
-- Status: Proposed (Jon to accept; implemented in roadmap P1.1)
+- Status: Proposed (approved by Jon 2026-11-22; Accepted once roadmap P1.1 lands on `main`)
 - Date: 2026-11-22
 - Deciders: Jon (approve), roadmap author
 

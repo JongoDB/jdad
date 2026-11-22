@@ -1,6 +1,6 @@
 # 0001: Canonical skill format (Agent Skills spec) plus per-tool compilers
 
-- Status: Proposed (Jon to accept)
+- Status: Proposed (approved by Jon 2026-11-22; Accepted once P1.4 and P1.5 land on `main`)
 - Date: 2026-11-22
 - Deciders: Jon (approve), roadmap author
 

@@ -4,7 +4,7 @@ Read [docs/VISION.md](docs/VISION.md) first. This file is the work queue for age
 
 ## How to use this file
 
-1. Take the **first unchecked item** whose dependencies are checked and that isn't marked **Needs Jon** (or whose Jon input is already recorded on its card).
+1. Take the **first unchecked item** whose dependencies are checked and that isn't marked **Needs Jon** (or whose Jon input is already recorded on its card or as a **Decision** line here).
 2. Find or create its Linear card (workspace `jongodb`, team `JON`, project `JDAD`) and post a plan there before writing code: steps, risks, and how each acceptance criterion will be verified.
 3. Work on a branch, run `./verify`, and open a PR that links the card, shows evidence (commands and output), and lists anything unverified. Checker reviews it. Don't merge your own PR.
 4. In the same PR, tick the item here (`- [x]`) and add the PR number after its title.
@@ -46,7 +46,7 @@ Goal: before adding features, make the repo itself cross-tool and give the KB an
   - Deliverables: YAML frontmatter for `sources/*.md` (`url`, `title`, `author`, `format`, `posted`, `retrieved`, `capture` = how the content was obtained, `items` = count of numbered practices); `sources/_TEMPLATE.md`; `jdad lint-kb` checks sources; migrate the existing source; a short "handoff contract" section in `docs/ingestion.md`.
   - Acceptance: lint fails on a missing field or a `src:` citation that points to a nonexistent source or item number; `list_sources` returns the new fields; existing tests pass.
   - Depends on: P1.2.
-  - **Needs Jon:** how Daisy hands entries over (opens PRs into `JongoDB/jdad` herself, or sends a draft for another agent to commit).
+  - Decision (Jon, 2026-11-22 11:35 AM ET): bots, Daisy included, may open KB PRs into `JongoDB/jdad` themselves. The handoff contract assumes that; Checker still reviews and nobody merges their own PR.
 - [ ] **P1.4 Canonical skills catalog**
   - Goal: one source for every skill, valid under the Agent Skills spec. ([ADR 0001](docs/adr/0001-canonical-skill-format-and-compilers.md))
   - Deliverables: `catalog/skills/<name>/SKILL.md` with spec-only frontmatter (`name`, `description`, `license`, `compatibility`, `metadata`, `allowed-tools`) and tool extras under `metadata` (for example `metadata.claude.disable-model-invocation`); `catalog/rules/<name>.md` for always-on, glob-scoped rules; move `jdad-performance` in; a spec validator (name = directory, lowercase-hyphen, ≤64 chars, description ≤1024 chars, body < 500 lines) in `./verify`.
@@ -100,7 +100,8 @@ Goal: richer, still read-only and offline tools. ([ADR 0003](docs/adr/0003-stdio
 - [ ] **P3.2 Optional semantic search**
   - Deliverables: `jdad[semantic]` extra with a small local embedding model; index built at deploy or update time, not per request; `search_practices(mode="semantic")` falls back to lexical when the extra isn't installed.
   - Acceptance: server starts and the full suite passes without the extra; with it, on ≥ 20 committed, labeled paraphrase queries, semantic recall@5 ≥ lexical recall@5 + 0.10; peak RSS under a fixed 100-request workload is recorded in the PR and is ≤ the memory budget Jon approves on the card.
-  - Depends on: P3.1. **Needs Jon:** OK to add the dependency and the RAM on the droplet.
+  - Depends on: P3.1. **Needs Jon:** the droplet's new RAM size and the memory budget for the acceptance check. Both stay open until Jon regains DigitalOcean console access (support ticket open).
+  - Decision (Jon, 2026-11-22 11:35 AM ET): semantic search and its dependency are approved, and the droplet's RAM will be increased.
 - [ ] **P3.3 Checklists v2**
   - Deliverables: `get_checklist(tags, phase="plan|review|ship")` returns Markdown checkboxes with rule IDs and citations; `kb://checklists/{tag}` resources.
   - Acceptance: for each of `plan`, `review` and `ship`, tests assert the rule IDs selected for a fixture tag set, that every line matches `- [ ] <rule-id>: <text> (<citation URL>)`, and that `kb://checklists/{tag}` equals `get_checklist([tag])`; tests on the command files assert `/jdad plan` and `/jdad review` instruct the agent to cite rule IDs.
@@ -154,7 +155,8 @@ Goal: the verify/CI, security, observability and performance opinions as KB rule
 - [ ] **P5.1 Verify and CI standard**
   - Deliverables: `practices/verify-ci.md`; `VERIFY.md` contract (stages: format, lint, typecheck, unit, integration, build, secret scan, dependency audit; exit codes; `--fast`); GitHub Actions template with SHA-pinned actions, `permissions: contents: read`, concurrency groups; a branch-protection checklist.
   - Acceptance: `actionlint` exits 0 on the template workflow and this repo's workflow; a test checks both against a machine-readable schema of the contract: required stages present, every `uses:` pinned to a 40-character SHA, `permissions: contents: read`, a `concurrency` group, and `--fast` running only the format, lint and unit stages.
-  - Depends on: P2.3. **Needs Jon:** GitHub Actions billing (CI runs were blocked on JDAD PR #1).
+  - Depends on: P2.3.
+  - Decision (Jon, 2026-11-22 11:35 AM ET): fixing GitHub Actions billing is approved (CI runs were blocked on JDAD PR #1). Until a run shows on a PR, CI evidence comes from local `./verify`.
 - [ ] **P5.2 Security and supply-chain defaults**
   - Deliverables: `practices/security.md` and `practices/supply-chain.md` (secret scanning with gitleaks in pre-commit and CI, Dependabot or Renovate, OSV-Scanner, pinned actions and lockfiles, optional SBOM, OpenSSF Scorecard; agent-specific: deny reading secret files, review project hooks and MCP servers before trust, pin marketplace sources by SHA, hooks fail open in Grok Build so CI stays the backstop); template pieces.
   - Acceptance: each rule cited or labeled; with the template gitleaks config, a fake-secret fixture makes gitleaks exit 1 and a clean fixture exits 0; the Dependabot file validates against its schema; OSV-Scanner exits non-zero on a lockfile fixture with a known vulnerable version.
@@ -183,11 +185,13 @@ Goal: prove the opinions improve agent output, and catch regressions when the KB
 - [ ] **P6.1 Eval design and benchmark repo skeleton**
   - Deliverables: `docs/evals/DESIGN.md`; a separate `JongoDB/jdad-bench` repo with 6–10 small tasks (for example: a paginated list endpoint with an N+1 trap, an outbound call that needs a timeout, a feature that needs tests, a bug fix, adding tracing, a config with a secret-handling trap), each with hidden tests and a task prompt.
   - Acceptance: every task has a failing hidden test on the starting commit and a reference solution that passes.
-  - Depends on: P3.3. **Needs Jon:** create the repo (private?) and approve the task list.
+  - Depends on: P3.3. **Needs Jon:** the repo's visibility (private or public) and approval of the task list.
+  - Decision (Jon, 2026-11-22 11:35 AM ET): a separate `JongoDB/jdad-bench` repo is approved.
 - [ ] **P6.2 Headless runner**
   - Deliverables: a runner that executes each task with and without JDAD (harness + MCP) across `claude -p` (note: `--bare` skips hooks, skills, plugins, MCP servers and CLAUDE.md discovery and needs `ANTHROPIC_API_KEY`, so the JDAD variant either passes everything explicitly with `--plugin-dir`, `--mcp-config` and `--settings`, or runs non-bare in an isolated `HOME`), `codex exec`, `grok -p --output-format json --no-auto-update` and `agent -p`; N runs per cell; per-run turn and budget caps; JSON results.
   - Acceptance: one task, one tool, N=2 per variant, same commit and model; a results JSON validates against a committed schema; the results show the baseline and JDAD variants loaded different instructions, skills and MCP servers (from each CLI's own listing); for each cap (turns, budget, wall-clock timeout), a forced-overrun fixture terminates the run and writes a partial result marked `capped`.
-  - Depends on: P6.1, P4.3. **Needs Jon:** API keys and a monthly eval budget.
+  - Depends on: P6.1, P4.3.
+  - Decision (Jon, 2026-11-22 11:35 AM ET): evals are approved with a budget capped at $20/month across all tools. The runner's budget caps must keep total spend at or under that. Spending more needs a written justification sent to Jon and his OK first.
 - [ ] **P6.3 Graders**
   - Deliverables: hidden tests pass; `./verify` passes; KB-rule detectors (static checks such as pagination present or timeouts set); an LLM judge with a rubric run as a separate reviewer.
   - Acceptance: each grader has unit tests on known-good and known-bad outputs.
@@ -210,7 +214,8 @@ Goal: prove the opinions improve agent output, and catch regressions when the KB
 - [ ] **P7.2 Update prompts**
   - Deliverables: install docs that turn on marketplace auto-update (off by default for third-party Claude marketplaces); a compatibility manifest from the server with `plugin_min_version` (semver) kept separate from `kb_revision` (git SHA + date); `/jdad` compares its own plugin semver with `plugin_min_version` (never with the KB SHA) and tells the user when the plugin is behind; optional `SessionStart` hook that prints one line when an update exists.
   - Acceptance: the server exposes a compatibility manifest with separate fields `plugin_min_version` (semver) and `kb_revision` (git SHA + newest entry date); tests with stubbed plugin versions older than, equal to and newer than `plugin_min_version` give notice, no notice and a compatibility warning; a test asserts the server makes zero outbound network calls.
-  - Depends on: P7.1. **Needs Jon:** OK to enable auto-update on his hosts.
+  - Depends on: P7.1.
+  - Decision (Jon, 2026-11-22 11:35 AM ET): turning on marketplace auto-update on Jon's hosts is approved.
 - [ ] **P7.3 Codex and Cursor package (Agent Plugins)**
   - Deliverables: compiler emits an Agent Plugins package (root `plugin.json`, `skills/`, `mcp.json`) and `.agents/plugins/marketplace.json`; install docs for Codex and Cursor.
   - Acceptance: the package validates against the Agent Plugins JSON schema. Runtime, per CLI installed: in a temp `HOME`, the named marketplace-add and install commands succeed, the plugin shows enabled with 7 tools, and a `tools/call` against a local test server succeeds. A CLI that isn't installed stays open as runtime unverified on the card.
@@ -229,7 +234,8 @@ Goal: prove the opinions improve agent output, and catch regressions when the KB
 - [ ] **P8.1 Docs site**
   - Deliverables: a static site from `docs/`, `practices/` and `ROADMAP.md`, deployed on Cloudflare Pages.
   - Acceptance: the site build exits 0 in CI and a preview URL is in the PR; a link check resolves every internal file and anchor, records every external URL's status, fails on 404 or 410, and a seeded broken link makes CI fail.
-  - Depends on: P5.1. **Needs Jon:** public or private (behind Cloudflare Access).
+  - Depends on: P5.1. **Needs Jon:** public or private (behind Cloudflare Access). Jon's answer, "yes", approves the docs site but doesn't choose between the two.
+  - Decision (Jon, 2026-11-22 11:35 AM ET): the docs site is approved.
 - [ ] **P8.2 Doc-gardening routine**
   - Deliverables: a scheduled agent that checks links, research files older than 90 days, roadmap items with merged PRs but unticked boxes, and opens a fix-up PR.
   - Acceptance: against a fixture with one broken link, one research file older than 90 days and one unticked item whose PR merged, a recorded run reports all 3 and opens one PR; a rerun on the fixed fixture opens no PR.
