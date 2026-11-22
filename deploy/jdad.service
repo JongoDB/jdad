@@ -13,12 +13,13 @@ Environment=KB_ROOT=/opt/jdad
 Environment=UV_PYTHON_PREFERENCE=only-system
 EnvironmentFile=-/etc/jdad.env
 # Binary lives in the checkout venv, never under /root or /home.
-ExecStart=/opt/jdad/.venv/bin/jdad-mcp --http --host 0.0.0.0 --port 8765
+ExecStart=/opt/jdad/.venv/bin/jdad-mcp --http --host 127.0.0.1 --port 8765
 Restart=on-failure
 RestartSec=5
 
-# Dedicated unprivileged user, plus a tight sandbox. The service needs
-# JDAD_TOKEN in /etc/jdad.env; without it this bind is refused at start.
+# Dedicated unprivileged user, plus a tight sandbox. Binds on 127.0.0.1 only;
+# expose it with a Cloudflare Tunnel, not a public bind. Set a non-empty
+# JDAD_TOKEN in /etc/jdad.env (install.sh will not start the unit without one).
 # The process is read-only against the checkout (git --no-optional-locks).
 # uv sync runs from update.sh / install.sh as user jdad, outside this unit.
 NoNewPrivileges=true

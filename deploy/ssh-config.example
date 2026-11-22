@@ -1,7 +1,6 @@
-# SSH config for the jdad system user. sudo -u jdad has no SSH agent,
-# so point Host github.com at an absolute IdentityFile and set
-# IdentitiesOnly yes. Install the private deploy key at
-# /var/lib/jdad/.ssh/id_ed25519 (mode 0600); this directory must be 0700.
+# Pin github.com in /var/lib/jdad/.ssh/known_hosts using GitHub's published
+# host keys and a fingerprint check. Do not use ssh-keyscan or
+# StrictHostKeyChecking accept-new. See the README bootstrap order.
 Host github.com
   HostName github.com
   User git
