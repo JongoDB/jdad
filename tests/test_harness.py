@@ -110,10 +110,13 @@ def test_settings_hooks_point_at_executable_scripts() -> None:
         bash("python3 - <<'EOF'\nx = '$(cat .env)'\nEOF"),  # quoted heredoc body is literal
         bash("find . -name '*.pem'"),  # listing names only
         bash("cat *.md *.txt"),
+        bash("for d in catalog/skills/*/; do echo $d; done"),  # "*/" matches directories only
+        bash("echo $((1 << 2))"),
     ],
     ids=["readme", "abs-src", "env-example-name", "pytest", "normal-push", "rm-file", "rm-r", "heredoc-body",
          "commit-message", "commit-message-eq", "gh-body", "echo-text", "ls-star", "cat-md-glob", "bash-lc-ok",
-         "escaped-substitution", "quoted-heredoc-literal", "find-names", "cat-md-txt"],
+         "escaped-substitution", "quoted-heredoc-literal", "find-names", "cat-md-txt",
+         "dir-glob-loop", "arith-shift"],
 )
 def test_guard_allows(event: dict) -> None:
     assert decision(event) == "allow"
@@ -164,6 +167,12 @@ def test_guard_allows(event: dict) -> None:
         bash("sh -ec 'git push -f'"),
         bash("eval 'rm -rf build'"),
         bash(_nested_sh(6)),  # past the nesting limit: deny
+        # fifth review round
+        bash("echo hi # <<'EOF'\nrm -rf build\nEOF"),  # "<<" in a comment isn't a heredoc
+        bash("((a<<2))\nrm -rf build\n2"),  # arithmetic shift, not a heredoc
+        bash("cat <<E\"O\"F\nEOF\nrm -rf build\nE"),  # the delimiter is the whole word EOF
+        bash("find . -name '*.pem' | xargs cat"),  # a lister piped on reads the files
+        bash("ls > x.pem"),  # a redirect target is never exempt
         bash("cat .e*"),
         bash("cat *.pem"),
         bash("cp ~/.ssh/id_* /tmp"),

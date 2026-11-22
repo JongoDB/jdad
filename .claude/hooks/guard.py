@@ -55,7 +55,8 @@ def restore(text: str) -> str:
     return text.translate(_RESTORE)
 
 
-HEREDOC_RE = re.compile(r"<<(-?)[ \t]*(?:'([^'\n]*)'|\"([^\"\n]*)\"|\\?([A-Za-z0-9_.-]+))")
+REDIRECTS = (">", ">>", "<", "1>", "2>", "&>", ">|")
+WORD_START = " \t\n;|&("
 
 
 class Unclear(Exception):
@@ -165,10 +166,21 @@ def scan(command: str) -> tuple[str, list[str]]:
             quote = c
             out.append(c)
             i += 1
+        elif c == "#" and (i == 0 or command[i - 1] in WORD_START):
+            # A comment runs to the end of the line; nothing in it is run,
+            # and a "<<" in it doesn't start a heredoc.
+            end = command.find("\n", i)
+            i = n if end < 0 else end
+        elif command.startswith("((", i) and (i == 0 or command[i - 1] in WORD_START):
+            # Arithmetic: "<<" is a shift here, not a heredoc.
+            end = _match_paren(command, i)
+            inner.extend(_body_substitutions(command[i + 2:end]))
+            out.append(command[i:end + 1])
+            i = end + 1
         elif command.startswith("<<<", i):
             out.append("<<<")
             i += 3
-        elif command.startswith("<<", i) and HEREDOC_RE.match(command, i):
+        elif command.startswith("<<", i):
             i = _heredoc(command, i, out, inner)
         else:
             out.append(c)
@@ -178,19 +190,55 @@ def scan(command: str) -> tuple[str, list[str]]:
     return "".join(out), inner
 
 
+def _delimiter(command: str, i: int) -> tuple[str, bool, int]:
+    """Parse a heredoc delimiter word at command[i:]: (word, quoted, end).
+    Any quoting anywhere in the word makes the body literal, as in bash."""
+    n, word, quoted = len(command), [], False
+    while i < n and command[i] not in " \t\n;|&<>()":
+        c = command[i]
+        if c == "'":
+            end = command.find("'", i + 1)
+            if end < 0:
+                raise Unclear("unclosed quote in a heredoc delimiter")
+            word.append(command[i + 1:end])
+            quoted, i = True, end + 1
+        elif c == '"':
+            j = i + 1
+            while j < n and command[j] != '"':
+                j += 2 if command[j] == "\\" else 1
+            if j >= n:
+                raise Unclear("unclosed quote in a heredoc delimiter")
+            word.append(command[i + 1:j].replace("\\", ""))
+            quoted, i = True, j + 1
+        elif c == "\\":
+            word.append(command[i + 1:i + 2])
+            quoted, i = True, i + 2
+        elif c in "$`":
+            raise Unclear("expansion in a heredoc delimiter")
+        else:
+            word.append(c)
+            i += 1
+    if not word:
+        raise Unclear("heredoc with no delimiter")
+    return "".join(word), quoted, i
+
+
 def _heredoc(command: str, i: int, out: list[str], inner: list[str]) -> int:
-    match = HEREDOC_RE.match(command, i)
-    quoted = match.group(2) is not None or match.group(3) is not None
-    delimiter = match.group(2) if match.group(2) is not None else match.group(3) if quoted else match.group(4)
-    out.append(command[i:match.end()])
-    line_end = command.find("\n", match.end())
+    start = i + 2
+    dash = command.startswith("-", start)
+    start += 1 if dash else 0
+    while start < len(command) and command[start] in " \t":
+        start += 1
+    delimiter, quoted, word_end = _delimiter(command, start)
+    out.append(command[i:word_end])
+    line_end = command.find("\n", word_end)
     if line_end < 0:
-        return match.end()
+        return word_end
     # The rest of the opening line is ordinary shell text.
-    rest_out, rest_inner = scan(command[match.end():line_end])
+    rest_out, rest_inner = scan(command[word_end:line_end])
     out.append(rest_out + "\n")
     inner.extend(rest_inner)
-    strip = "\t" if match.group(1) else ""
+    strip = "\t" if dash else ""
     body_lines, j, n = [], line_end + 1, len(command)
     while j < n:
         k = command.find("\n", j)
@@ -208,8 +256,9 @@ def _heredoc(command: str, i: int, out: list[str], inner: list[str]) -> int:
     return j
 
 
-def _commands(command: str) -> list[list[str]]:
-    """Split into simple commands, respecting quotes."""
+def _commands(command: str) -> list[tuple[list[str], bool]]:
+    """Split into simple commands, respecting quotes. Each comes with
+    whether its output is piped into the next command."""
     lex = shlex.shlex(command, posix=True, punctuation_chars=OPERATOR_CHARS)
     lex.whitespace = " \t\r"
     lex.whitespace_split = True
@@ -217,17 +266,17 @@ def _commands(command: str) -> list[list[str]]:
         tokens = list(lex)
     except ValueError as exc:
         raise Unclear(f"can't split the command ({exc})") from None
-    commands: list[list[str]] = []
+    commands: list[tuple[list[str], bool]] = []
     current: list[str] = []
     for token in tokens:
         if token and set(token) <= set(OPERATOR_CHARS):
             if current:
-                commands.append(current)
+                commands.append((current, token in ("|", "|&")))
             current = []
         else:
             current.append(token)
     if current:
-        commands.append(current)
+        commands.append((current, False))
     return commands
 
 
@@ -257,6 +306,8 @@ def glob_could_match_secret(token: str) -> bool:
     against sample secret names and names built from the glob's literal
     head and tail (".env" + tail, "id_rsa" + tail, head + ".pem"). A leading
     "*" or "?" doesn't match dotfiles, as in the shell."""
+    if token.endswith("/"):
+        return False  # "dir/*/" expands to directories only
     name = PurePath(token).name
     if not any(c in name for c in "*?["):
         return False
@@ -356,7 +407,7 @@ def _nested_commands(program: str, args: list[str]) -> list[str]:
     return nested
 
 
-def _simple_reason(raw_words: list[str], depth: int) -> str | None:
+def _simple_reason(raw_words: list[str], depth: int, piped: bool = False) -> str | None:
     raw_words = _strip_wrappers([restore(w) for w in raw_words[:1]] + raw_words[1:])
     if not raw_words:
         return None
@@ -378,15 +429,18 @@ def _simple_reason(raw_words: list[str], depth: int) -> str | None:
             reason = _push_reason(rest[1:])
             if reason:
                 return reason
-    lister = program in LISTERS and not (program == "find" and any(a in FIND_ACTIONS for a in args))
+    # A lister prints names only; piped on (find ... | xargs cat) it doesn't.
+    lister = program in LISTERS and not piped and not (program == "find" and any(a in FIND_ACTIONS for a in args))
+    targets = {raw_words[k + 1] for k, w in enumerate(raw_words[:-1]) if w in REDIRECTS}
     for raw_word in _scanned_words(program, raw_words):
+        redirect = raw_word in targets or any(c in raw_word for c in "<>")
         for candidate in _expand_braces(raw_word):
             for raw_token in re.split(r"[<>=:]", candidate):
                 if not raw_token:
                     continue
                 globbing = any(c in raw_token for c in "*?[")  # unquoted only
                 token = restore(raw_token)
-                if lister and any(c in token for c in "*?["):
+                if lister and not redirect and any(c in token for c in "*?["):
                     continue  # a pattern argument to ls/find/echo lists names only
                 pattern = secret_name(token)
                 if pattern:
@@ -408,8 +462,8 @@ def bash_reason(command: str, depth: int = 0) -> str | None:
         reason = bash_reason(sub, depth + 1)
         if reason:
             return reason
-    for words in commands:
-        reason = _simple_reason(words, depth)
+    for words, piped in commands:
+        reason = _simple_reason(words, depth, piped)
         if reason:
             return reason
     return None
