@@ -90,13 +90,28 @@ The default URL is `https://jdad-mcp.jondevs.com/mcp`. Clients send only `Author
 /plugin install jdad@jdad
 ```
 
-The plugin's `.mcp.json` already points at `https://jdad-mcp.jondevs.com/mcp` and sends:
+The plugin's `.mcp.json` points at `https://jdad-mcp.jondevs.com/mcp` and sends:
 
 ```
-Authorization: Bearer ${JDAD_TOKEN}
+Authorization: Bearer ${user_config.jdad_token}
 ```
 
-Claude Code expands `${JDAD_TOKEN}` from the environment when it starts the plugin (official plugin MCP config: `url` and `headers` support `${VAR}` and `${VAR:-default}`). Export `JDAD_TOKEN` in the environment of the Claude Code process. If the variable is unset, Claude Code warns and may send the unexpanded `${JDAD_TOKEN}` text, which the server rejects with 401. It also ships the `/jdad` slash command (`plan`, `review`, `perf`, `add <url>`) and a `jdad-performance` skill.
+`jdad_token` is a plugin option (`userConfig`, `sensitive: true`). Claude Code asks for it when the plugin is enabled, masks the input, and keeps it in the OS credential store (the macOS Keychain, for example), never in `settings.json`. To set or change it later, use `/config`, or from a shell (reading the value from a file so it isn't typed or echoed):
+
+```bash
+python3 -c 'import json,sys; print(json.dumps({"jdad_token": open(sys.argv[1]).read().strip()}))' /path/to/token-file \
+  | claude plugin configure jdad@jdad --values-stdin
+claude mcp list   # plugin:jdad:jdad ... ✔ Connected
+```
+
+Until the token is set, the server shows "Failed to connect" with a 401. The plugin also ships the `/jdad` slash command (`plan`, `review`, `perf`, `add <url>`) and a `jdad-performance` skill.
+
+**Upgrading from 0.1.x**, which read `JDAD_TOKEN` from the environment: after the update, set the option once as above. Claude Code can't fall back from a plugin option to an environment variable in one header (a `${user_config.jdad_token:-${JDAD_TOKEN}}` form makes the server fail to load; tested with Claude Code 2.1.330). If you'd rather keep the token in the environment, leave the option unset, disable the plugin's server in `/mcp`, and add your own user-scope entry:
+
+```bash
+claude mcp add --scope user --transport http jdad-env https://jdad-mcp.jondevs.com/mcp \
+  --header 'Authorization: Bearer ${JDAD_TOKEN}'
+```
 
 This repo is private, so the host that adds the marketplace needs git auth for `github.com/JongoDB/jdad`.
 

@@ -18,7 +18,16 @@ def test_marketplace_and_plugin_manifests() -> None:
     mcp = json.loads((REPO_ROOT / ".mcp.json").read_text())
     server = mcp["mcpServers"]["jdad"]
     assert server["url"] == "https://jdad-mcp.jondevs.com/mcp"
-    assert server["headers"]["Authorization"] == "Bearer ${JDAD_TOKEN}"
+    assert server["headers"]["Authorization"] == "Bearer ${user_config.jdad_token}"
+    # The token is a sensitive plugin option (roadmap P3.7): masked, kept in
+    # the OS credential store, never a literal in the repo.
+    option = plugin["userConfig"]["jdad_token"]
+    assert option["type"] == "string"
+    assert option["sensitive"] is True
+    assert option["title"] and option["description"]
+    assert "default" not in option
+    assert set(option) <= {"type", "title", "description", "sensitive", "required"}
+    assert list(server["headers"]) == ["Authorization"]
     assert "CF-Access-Client-Id" not in server["headers"]
     assert "CF-Access-Client-Secret" not in server["headers"]
     command = (REPO_ROOT / "commands/jdad.md").read_text()
