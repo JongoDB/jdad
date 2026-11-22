@@ -11,6 +11,13 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+# update.sh has no require_root and would act on $JDAD_ROOT (default
+# /opt/jdad) if that checkout is writable. Point it at an empty temp dir
+# so a privilege-dropped run cannot mutate a real tree.
+EMPTY_ROOT="$(mktemp -d)"
+trap 'rm -rf "$EMPTY_ROOT"' EXIT
+export JDAD_ROOT="$EMPTY_ROOT"
+
 # Run a command, dropping privileges first when we are root.
 invoke() {
   if [[ "$(id -u)" -ne 0 ]]; then
@@ -89,7 +96,7 @@ fi
 source "$ROOT/deploy/common.sh"
 
 tmpdir="$(mktemp -d)"
-trap 'rm -rf "$tmpdir"' EXIT
+trap 'rm -rf "$EMPTY_ROOT" "$tmpdir"' EXIT
 
 printf 'JDAD_TOKEN=\n' >"$tmpdir/empty"
 printf 'JDAD_TOKEN=""\n' >"$tmpdir/quoted"

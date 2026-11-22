@@ -59,7 +59,7 @@ jdad-mcp --http
 
 `KB_ROOT` overrides the content directory. It must point at a directory that contains `practices/` and `sources/`. If unset, the server uses a checkout of this repo when it can find one, otherwise the files bundled in the package.
 
-`JDAD_TOKEN` is optional on loopback. When set, every HTTP path except `/healthz` requires `Authorization: Bearer <token>`. Stdio does not use the token. Store the value in `/etc/jdad.env` (mode 0600) on the host; never commit it.
+`JDAD_TOKEN` is optional on loopback. When set, every HTTP path except `/healthz` requires `Authorization: Bearer <token>`. Stdio does not use the token. Store the value in `/etc/jdad.env` (mode 0600) on the host; never commit it. `JDAD_ALLOWED_HOSTS` is a comma-separated list of public hostnames the MCP transport will accept in the `Host` header (loopback is always allowed; DNS-rebinding protection stays on). Set it to the tunnel hostname in the same env file.
 
 The default HTTP bind is `127.0.0.1`. Binding to a non-loopback address (`0.0.0.0`, a public IP, or a hostname other than `localhost`) without `JDAD_TOKEN` refuses to start unless you pass `--allow-no-auth`, which logs a loud warning.
 
@@ -135,6 +135,22 @@ In `.cursor/mcp.json` (project) or `~/.cursor/mcp.json` (user):
 }
 ```
 
+On a LAN or loopback setup (no Cloudflare Access), drop the `CF-Access-*` headers. If those env vars are unset, Claude Code may send the literal `${JDAD_CF_CLIENT_ID}` / `${JDAD_CF_CLIENT_SECRET}` text, which the server ignores but is confusing. A LAN `.mcp.json` looks like this:
+
+```json
+{
+  "mcpServers": {
+    "jdad": {
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp",
+      "headers": {
+        "Authorization": "Bearer ${JDAD_TOKEN}"
+      }
+    }
+  }
+}
+```
+
 Stdio still works if you would rather run the server locally, including `uvx --from git+https://github.com/JongoDB/jdad jdad-mcp` (or `git+ssh://git@github.com/JongoDB/jdad`) with `gh auth` or an SSH key on the host.
 
 ## Deploy on the LXC
@@ -204,14 +220,14 @@ sudo install -o jdad -g jdad -m 0644 /tmp/github_known_hosts /var/lib/jdad/.ssh/
    # or: sudo /opt/jdad/deploy/install.sh
    # or: sudo JDAD_REPO=git@github.com:JongoDB/jdad.git ./deploy/install.sh
    sudo chmod 0600 /etc/jdad.env
-   sudo editor /etc/jdad.env   # set a non-empty JDAD_TOKEN; do not commit this file
+   sudo editor /etc/jdad.env   # set a non-empty JDAD_TOKEN and JDAD_ALLOWED_HOSTS; do not commit this file
    sudo systemctl start jdad.service
    curl -fsS http://127.0.0.1:8765/healthz
    ```
 
 Install `uv` in a location the root path can see, typically `/usr/local/bin/uv`, before step 4. `update.sh` / `install.sh` also look at `command -v uv`, then `/usr/local/bin/uv` and `~jdad/.local/bin/uv` (`/var/lib/jdad/.local/bin/uv`), or an explicit `UV=/absolute/path/to/uv`.
 
-The unit binds to `127.0.0.1:8765` as user `jdad`, with `UV_PYTHON_PREFERENCE=only-system`, `NoNewPrivileges`, `ProtectSystem=strict`, `ReadOnlyPaths=/opt/jdad`, `PrivateTmp`, and `ProtectHome=true`. Set a non-empty `JDAD_TOKEN` in `/etc/jdad.env` before starting. Expose the server with a Cloudflare Tunnel (below), not by binding to `0.0.0.0`.
+The unit binds to `127.0.0.1:8765` as user `jdad`, with `UV_PYTHON_PREFERENCE=only-system`, `NoNewPrivileges`, `ProtectSystem=strict`, `ReadOnlyPaths=/opt/jdad`, `PrivateTmp`, and `ProtectHome=true`. Set a non-empty `JDAD_TOKEN` in `/etc/jdad.env` before starting, and set `JDAD_ALLOWED_HOSTS` to the public hostname if you will reach the server through a tunnel that forwards that `Host` header. Expose the server with a Cloudflare Tunnel (below), not by binding to `0.0.0.0`.
 
 `deploy/update.sh` is idempotent: it resolves `uv` as above, runs `git` as the `jdad` user (`git pull --ff-only`), syncs deps as `jdad`, restarts only when HEAD changes, and starts the service if it is down. Run it as root from the repo root (or a user that can `systemctl` this unit and `sudo -u jdad`):
 
@@ -223,7 +239,12 @@ sudo ./deploy/update.sh
 
 Keep the server on its default bind, `127.0.0.1:8765`. Do not publish that port on the LXC.
 
-Run `cloudflared` inside the LXC with the service URL `http://localhost:8765`. Put a Cloudflare Access application on the tunnel hostname, with a Service Auth policy that accepts an Access service token.
+Run `cloudflared` inside the LXC with the service URL `http://127.0.0.1:8765` (`127.0.0.1` rather than `localhost`, because the unit is IPv4-only and `localhost` can resolve to `::1`). Put a Cloudflare Access application on the tunnel hostname, with a Service Auth policy that accepts an Access service token.
+
+`cloudflared` forwards the public `Host` header by default. The MCP SDK's DNS-rebinding protection only allows loopback hosts unless you say otherwise, so a request with `Host: jdad.example` would get `421 Invalid Host header`. Pick one of:
+
+- Set `JDAD_ALLOWED_HOSTS` in `/etc/jdad.env` to the public hostname (comma-separated if you have more than one), then restart the unit. Loopback stays allowed; the protection is not disabled. Example: `JDAD_ALLOWED_HOSTS=jdad.example`.
+- Or configure cloudflared `originRequest.httpHostHeader` to an allowed loopback host, for example `127.0.0.1:8765`, so the backend sees a loopback `Host` instead of the public name.
 
 Clients send all three of:
 
@@ -231,7 +252,7 @@ Clients send all three of:
 - `CF-Access-Client-Id: <JDAD_CF_CLIENT_ID>`
 - `CF-Access-Client-Secret: <JDAD_CF_CLIENT_SECRET>`
 
-The plugin `.mcp.json` and the Codex / Cursor examples already use those header names and the placeholder URL `https://jdad.example/mcp`. Leave that URL as a placeholder until the real hostname is chosen, then replace it in `.mcp.json` and in the agent configs.
+The plugin `.mcp.json` and the Codex / Cursor examples already use those header names and the placeholder URL `https://jdad.example/mcp`. Leave that URL as a placeholder until the real hostname is chosen, then replace it in `.mcp.json` and in the agent configs, and put that hostname in `JDAD_ALLOWED_HOSTS` (unless you use `httpHostHeader`).
 
 ## Development
 

@@ -9,6 +9,7 @@ import os
 from typing import Any
 
 from mcp.server import MCPServer
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -203,9 +204,86 @@ def check_http_bind(host: str, *, allow_no_auth: bool, token: str | None = None)
     )
 
 
+# Loopback Host/Origin values the MCP SDK allows by default for localhost binds.
+# Always included; JDAD_ALLOWED_HOSTS only adds public names. Protection stays on.
+_LOOPBACK_HOSTS = ("127.0.0.1:*", "localhost:*", "[::1]:*")
+_LOOPBACK_ORIGINS = (
+    "http://127.0.0.1:*",
+    "http://localhost:*",
+    "http://[::1]:*",
+    "https://127.0.0.1:*",
+    "https://localhost:*",
+    "https://[::1]:*",
+)
+
+
+def parse_allowed_hosts(raw: str | None = None) -> list[str]:
+    """Parse JDAD_ALLOWED_HOSTS: comma-separated public hostnames.
+
+    Loopback is not required here; it is always merged in later. A pasted
+    URL has its scheme and path stripped. Empty and whitespace-only items
+    are ignored.
+    """
+    text = os.environ.get("JDAD_ALLOWED_HOSTS", "") if raw is None else raw
+    hosts: list[str] = []
+    for part in text.split(","):
+        item = part.strip()
+        if not item:
+            continue
+        if "://" in item:
+            item = item.split("://", 1)[1]
+        item = item.split("/", 1)[0].strip()
+        if item and item not in hosts:
+            hosts.append(item)
+    return hosts
+
+
+def _host_allow_entries(hostname: str) -> list[str]:
+    entries = [hostname]
+    if not hostname.endswith(":*") and ":" not in hostname.rstrip("]"):
+        # Bare hostname (typical of a TLS frontend on 443) plus any port.
+        entries.append(f"{hostname}:*")
+    elif ":" in hostname and not hostname.endswith(":*") and not hostname.startswith("["):
+        # Explicit host:port already covers that one value.
+        pass
+    return entries
+
+
+def _origin_allow_entries(hostname: str) -> list[str]:
+    host = hostname.removesuffix(":*")
+    # IPv6 in Host is [::1] or [::1]:port; origins use http://[::1]:*
+    origins: list[str] = []
+    for scheme in ("https", "http"):
+        if host.endswith(":*") or ":" not in host.rstrip("]"):
+            origins.append(f"{scheme}://{host}")
+            if not host.endswith(":*"):
+                origins.append(f"{scheme}://{host}:*")
+        else:
+            origins.append(f"{scheme}://{host}")
+    return origins
+
+
+def transport_security_settings() -> TransportSecuritySettings:
+    """DNS-rebinding settings for streamable HTTP. Protection is never disabled."""
+    allowed_hosts = list(_LOOPBACK_HOSTS)
+    allowed_origins = list(_LOOPBACK_ORIGINS)
+    for hostname in parse_allowed_hosts():
+        for entry in _host_allow_entries(hostname):
+            if entry not in allowed_hosts:
+                allowed_hosts.append(entry)
+        for entry in _origin_allow_entries(hostname):
+            if entry not in allowed_origins:
+                allowed_origins.append(entry)
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=allowed_origins,
+    )
+
+
 def create_http_app():
     """Starlette app for streamable HTTP, with optional bearer auth and /healthz."""
-    app = mcp.streamable_http_app()
+    app = mcp.streamable_http_app(transport_security=transport_security_settings())
     app.add_middleware(BearerAuthMiddleware)
     return app
 

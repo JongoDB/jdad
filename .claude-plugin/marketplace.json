@@ -9,7 +9,8 @@
     {
       "name": "jdad",
       "source": "./",
-      "description": "Jon's agentic-dev knowledge base: /jdad commands, performance skill, and the hosted MCP server."
+      "description": "Jon's agentic-dev knowledge base: /jdad commands, performance skill, and the hosted MCP server.",
+      "version": "0.1.3"
     }
   ]
 }

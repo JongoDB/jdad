@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import http.client
 import json
 import socket
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import httpx2
@@ -337,3 +339,154 @@ def test_refuses_non_loopback_without_token(monkeypatch: pytest.MonkeyPatch, cap
     with caplog.at_level("WARNING"):
         check_http_bind("0.0.0.0", allow_no_auth=True)
     assert NO_AUTH_BIND_WARNING in caplog.text
+
+
+class _HostPreservingProxy:
+    """Reverse proxy that forwards to an upstream and keeps the client Host header."""
+
+    def __init__(self, upstream_port: int) -> None:
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, fmt: str, *args: object) -> None:
+                return
+
+            def _forward(self) -> None:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(length) if length else None
+                headers = {name: value for name, value in self.headers.items()}
+                conn = http.client.HTTPConnection("127.0.0.1", upstream_port, timeout=5)
+                try:
+                    conn.request(self.command, self.path, body=body, headers=headers)
+                    resp = conn.getresponse()
+                    data = resp.read()
+                finally:
+                    conn.close()
+                self.send_response(resp.status, resp.reason)
+                for name, value in resp.getheaders():
+                    if name.lower() in {"transfer-encoding", "connection"}:
+                        continue
+                    self.send_header(name, value)
+                self.send_header("Content-Length", str(len(data)))
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self) -> None:
+                self._forward()
+
+            def do_POST(self) -> None:
+                self._forward()
+
+            def do_DELETE(self) -> None:
+                self._forward()
+
+        self._httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = int(self._httpd.server_address[1])
+        self.base = f"http://127.0.0.1:{self.port}"
+        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._httpd.shutdown()
+        self._thread.join(timeout=5)
+        self._httpd.server_close()
+
+
+def _mcp_initialize(token: str) -> tuple[dict[str, str], dict]:
+    return (
+        {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json, text/event-stream",
+            "Content-Type": "application/json",
+        },
+        {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "jdad-tests", "version": "0"},
+            },
+        },
+    )
+
+
+def test_parse_allowed_hosts_splits_and_strips(monkeypatch: pytest.MonkeyPatch) -> None:
+    from jdad.server import parse_allowed_hosts, transport_security_settings
+
+    assert parse_allowed_hosts("") == []
+    assert parse_allowed_hosts("  ") == []
+    assert parse_allowed_hosts("jdad.example") == ["jdad.example"]
+    assert parse_allowed_hosts("jdad.example, other.example") == ["jdad.example", "other.example"]
+    assert parse_allowed_hosts("https://jdad.example/mcp,") == ["jdad.example"]
+
+    monkeypatch.setenv("JDAD_ALLOWED_HOSTS", "jdad.example")
+    settings = transport_security_settings()
+    assert settings.enable_dns_rebinding_protection is True
+    assert "127.0.0.1:*" in settings.allowed_hosts
+    assert "localhost:*" in settings.allowed_hosts
+    assert "[::1]:*" in settings.allowed_hosts
+    assert "jdad.example" in settings.allowed_hosts
+    assert "jdad.example:*" in settings.allowed_hosts
+    assert "https://jdad.example" in settings.allowed_origins
+    assert "https://jdad.example:*" in settings.allowed_origins
+
+
+def test_public_host_header_via_http_proxy(
+    monkeypatch: pytest.MonkeyPatch, kb_root: Path
+) -> None:
+    """A public Host through a forwarding proxy is 421 unless allowlisted."""
+    token = "test-jdad-token-not-a-secret"
+    monkeypatch.setenv("JDAD_TOKEN", token)
+    monkeypatch.delenv("JDAD_ALLOWED_HOSTS", raising=False)
+    headers, payload = _mcp_initialize(token)
+
+    def post_via_proxy(proxy: _HostPreservingProxy, host: str) -> httpx2.Response:
+        # Talk to the proxy as if it were the public hostname: the request
+        # URL is the proxy, but Host is the public name, which the proxy
+        # forwards unchanged (the same way cloudflared preserves req.Host).
+        return httpx2.post(
+            f"{proxy.base}/mcp",
+            headers={**headers, "Host": host},
+            json=payload,
+            timeout=5,
+        )
+
+    denied_server = _HttpServer(_free_port())
+    denied_server.start()
+    denied_proxy = _HostPreservingProxy(denied_server.port)
+    denied_proxy.start()
+    try:
+        denied = post_via_proxy(denied_proxy, "jdad.example")
+        assert denied.status_code == 421
+        assert "Invalid Host header" in denied.text
+    finally:
+        denied_proxy.stop()
+        denied_server.stop()
+
+    monkeypatch.setenv("JDAD_ALLOWED_HOSTS", "jdad.example")
+    allowed_server = _HttpServer(_free_port())
+    allowed_server.start()
+    allowed_proxy = _HostPreservingProxy(allowed_server.port)
+    allowed_proxy.start()
+    try:
+        accepted = post_via_proxy(allowed_proxy, "jdad.example")
+        assert accepted.status_code == 200
+        # Loopback Host still works when a public name is also listed.
+        loopback = httpx2.post(
+            f"{allowed_server.base}/mcp",
+            headers=headers,
+            json=payload,
+            timeout=5,
+        )
+        assert loopback.status_code == 200
+        # A different public Host is still rejected.
+        other = post_via_proxy(allowed_proxy, "not-listed.example")
+        assert other.status_code == 421
+    finally:
+        allowed_proxy.stop()
+        allowed_server.stop()
