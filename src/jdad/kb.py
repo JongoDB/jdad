@@ -2,14 +2,27 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+logger = logging.getLogger("jdad.kb")
 
 PRACTICES_DIR = "practices"
 SOURCES_DIR = "sources"
+
+# The tags a practice section may carry (docs/kb-schema.md). P2.3 extends this.
+KNOWN_TAGS = ("frontend", "backend", "db", "infra", "observability", "testing")
+RULE_ID_RE = re.compile(r"^[a-z][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$")
+_RULE_ID_SUFFIX_RE = re.compile(r"\s*\{#([^}]*)\}\s*$")
+_CITATION_SUFFIX_RE = re.compile(r"\s*\((src:[^()]*|KB addition)\)\s*$", re.IGNORECASE)
+_RULE_START_RE = re.compile(r"^[-*]\s+(.*)$")
+_NUMBERED_RE = re.compile(r"^\s*\d+[.)]\s+(.*)$")
+_NESTED_BULLET_RE = re.compile(r"^\s+[-*+]\s+(.*)$")
+_APPLIES_RE = re.compile(r"^\s+applies when:\s*(.*)$", re.IGNORECASE)
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _TRAILING_TAG_RE = re.compile(r"\s*\[([a-z][a-z0-9-]*)\]\s*$")
@@ -132,15 +145,138 @@ def extract_bullets(body: str) -> list[str]:
 
 
 @dataclass(frozen=True)
+class Rule:
+    """One KB rule: a `- ` bullet in a tagged section (docs/kb-schema.md)."""
+
+    id: str | None
+    text: str
+    citation: str | None
+    applies_when: str | None
+    tags: tuple[str, ...]
+    line: int
+
+    @property
+    def origin(self) -> str | None:
+        if self.citation is None:
+            return None
+        return "kb-addition" if self.citation.lower() == "kb addition" else "source"
+
+    def as_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "text": self.text,
+            "tags": list(self.tags),
+            "citation": self.citation,
+            "origin": self.origin,
+            "applies_when": self.applies_when,
+        }
+
+    def checklist_line(self) -> str:
+        line = f"- {self.id or '(no id)'}: {self.text}"
+        if self.citation:
+            line += f" ({self.citation})"
+        if self.applies_when:
+            line += f" Applies when: {self.applies_when}"
+        return line
+
+
+@dataclass(frozen=True)
+class ParseIssue:
+    """Text the parser kept but that breaks the rule format; `jdad lint-kb` fails on it."""
+
+    line: int
+    kind: str
+    message: str
+    text: str = ""
+
+
+@dataclass(frozen=True)
 class Section:
     heading: str
     level: int
     tags: tuple[str, ...]
     body: str
+    line: int = 0
+    rules: tuple[Rule, ...] = ()
+    issues: tuple[ParseIssue, ...] = ()
 
     @property
     def bullets(self) -> list[str]:
         return extract_bullets(self.body)
+
+
+def _finish_rule(raw: str, applies: str | None, tags: tuple[str, ...], line: int) -> Rule:
+    text = " ".join(raw.split())
+    rule_id = None
+    match = _RULE_ID_SUFFIX_RE.search(text)
+    if match:
+        rule_id = match.group(1).strip()
+        text = text[: match.start()]
+    citation = None
+    match = _CITATION_SUFFIX_RE.search(text)
+    if match:
+        citation = " ".join(match.group(1).split())
+        text = text[: match.start()]
+    return Rule(
+        id=rule_id,
+        text=text.strip(),
+        citation=citation,
+        applies_when=" ".join(applies.split()) if applies else None,
+        tags=tags,
+        line=line,
+    )
+
+
+def parse_rules(
+    lines: list[tuple[int, str]], tags: tuple[str, ...]
+) -> tuple[tuple[Rule, ...], tuple[ParseIssue, ...]]:
+    """Parse a section body (numbered lines) into rules.
+
+    Nothing is dropped silently: nested bullets and numbered items are kept
+    (joined to the rule, or as a rule of their own) and reported as issues,
+    and prose that isn't part of a rule is reported too.
+    """
+    rules: list[Rule] = []
+    issues: list[ParseIssue] = []
+    current: dict | None = None
+
+    def close() -> None:
+        nonlocal current
+        if current is not None:
+            rules.append(_finish_rule(current["raw"], current["applies"], tags, current["line"]))
+            current = None
+
+    for number, line in lines:
+        if not line.strip():
+            close()
+            continue
+        start = _RULE_START_RE.match(line)
+        numbered = _NUMBERED_RE.match(line) if not start else None
+        if start or (numbered and not line[:1].isspace()):
+            close()
+            if numbered:
+                issues.append(ParseIssue(number, "numbered", "numbered item: use a '- ' bullet", line))
+            current = {"raw": (start or numbered).group(1), "applies": None, "line": number}
+            continue
+        if line[:1].isspace():
+            applies = _APPLIES_RE.match(line)
+            nested = _NESTED_BULLET_RE.match(line) or _NUMBERED_RE.match(line)
+            if current is None:
+                issues.append(ParseIssue(number, "stray-text", "indented text that belongs to no rule", line))
+            elif applies:
+                current["applies"] = applies.group(1)
+            elif nested:
+                issues.append(
+                    ParseIssue(number, "nested", "nested list item: make it a rule of its own", line)
+                )
+                current["raw"] += "; " + nested.group(1)
+            else:
+                current["raw"] += " " + line.strip()
+            continue
+        close()
+        issues.append(ParseIssue(number, "stray-text", "text in a section that isn't a '- ' rule", line))
+    close()
+    return tuple(rules), tuple(issues)
 
 
 @dataclass(frozen=True)
@@ -151,6 +287,11 @@ class PracticeDoc:
     preamble: str
     sections: tuple[Section, ...]
     text: str
+    issues: tuple[ParseIssue, ...] = field(default=())
+
+    @property
+    def rules(self) -> list[Rule]:
+        return [rule for section in self.sections for rule in section.rules]
 
     @property
     def tags(self) -> list[str]:
@@ -174,20 +315,28 @@ def parse_practice(path: Path, *, root: Path) -> PracticeDoc:
     current: dict | None = None
     seen_h1 = False
 
+    preamble_issues: list[ParseIssue] = []
+
     def close() -> None:
         nonlocal current
         if current is not None:
+            tags = tuple(current["tags"])
+            rules, issues = parse_rules(current["numbered"], tags)
             sections.append(
                 Section(
                     heading=current["heading"],
                     level=current["level"],
-                    tags=tuple(current["tags"]),
+                    tags=tags,
                     body="\n".join(current["body"]).strip("\n"),
+                    line=current["line"],
+                    rules=rules,
+                    issues=issues,
                 )
             )
             current = None
 
-    for raw in text.splitlines():
+    for number, raw in enumerate(text.split("\n"), start=1):
+        raw = raw.removesuffix("\r")
         match = _HEADING_RE.match(raw)
         if match:
             level = len(match.group(1))
@@ -202,12 +351,19 @@ def parse_practice(path: Path, *, root: Path) -> PracticeDoc:
                     "level": level,
                     "tags": tags,
                     "body": [],
+                    "numbered": [],
+                    "line": number,
                 }
                 continue
         if current is None:
             preamble_lines.append(raw)
+            if _RULE_START_RE.match(raw) or _NUMBERED_RE.match(raw):
+                preamble_issues.append(
+                    ParseIssue(number, "outside-section", "a rule before the first tagged section", raw)
+                )
         else:
             current["body"].append(raw)
+            current["numbered"].append((number, raw))
 
     close()
     preamble = "\n".join(preamble_lines).strip("\n").strip()
@@ -219,6 +375,7 @@ def parse_practice(path: Path, *, root: Path) -> PracticeDoc:
         preamble=preamble,
         sections=tuple(sections),
         text=text,
+        issues=tuple(preamble_issues),
     )
 
 
@@ -243,7 +400,16 @@ class KnowledgeBase:
         return sorted(self.sources_dir.glob("*.md"))
 
     def practices(self) -> list[PracticeDoc]:
-        return [parse_practice(path, root=self.root) for path in self.practice_paths()]
+        """Every practice file that parses. A file that can't be read or parsed
+        is logged and skipped, so one bad file doesn't break every listing
+        tool; `jdad-mcp --check` and `jdad lint-kb` still fail on it."""
+        docs: list[PracticeDoc] = []
+        for path in self.practice_paths():
+            try:
+                docs.append(parse_practice(path, root=self.root))
+            except (OSError, UnicodeDecodeError, ValueError) as exc:
+                logger.warning("skipping practice %s: %s: %s", path.name, type(exc).__name__, exc)
+        return docs
 
     def list_topics(self) -> list[dict]:
         topics = []
@@ -300,6 +466,7 @@ class KnowledgeBase:
                             "heading": doc.title,
                             "tags": doc.tags,
                             "body": doc.preamble,
+                            "rules": [],
                         }
                     )
             for section in doc.sections:
@@ -314,6 +481,7 @@ class KnowledgeBase:
                             "heading": section.heading,
                             "tags": list(section.tags),
                             "body": section.body.strip(),
+                            "rules": [rule.as_dict() for rule in section.rules],
                         }
                     )
         return hits
@@ -327,7 +495,7 @@ class KnowledgeBase:
                 section_tags = {t.lower() for t in section.tags}
                 if wanted and not (section_tags & wanted):
                     continue
-                if section.bullets:
+                if section.rules:
                     matched.append(section)
             if not matched:
                 continue
@@ -341,8 +509,8 @@ class KnowledgeBase:
                 if suffix:
                     heading = f"{heading} {suffix}"
                 lines.append(heading)
-                for bullet in section.bullets:
-                    lines.append(f"- {bullet}")
+                for rule in section.rules:
+                    lines.append(rule.checklist_line())
                 lines.append("")
             blocks.append("\n".join(lines).rstrip())
         if not blocks:

@@ -20,10 +20,11 @@ When Jon (or anyone) sends a video, article, or thread to mine:
 3. Fold the useful rules into `practices/<topic>.md`, or add a new topic file if none fits.
    - Deduplicate. If a rule already exists, add a source citation instead of repeating the bullet.
    - Tag every section with one or more of: `[frontend]` `[backend]` `[db]` `[infra]` `[observability]` `[testing]`.
+   - Follow `docs/kb-schema.md`: one instruction per `- ` rule, ending with its citation `(src: <source> #n)` and a permanent ID `{#<prefix>.<area>.<slug>}`.
    - Cite the source on each rule, e.g. `(src: breakingbreach #8)`.
    - Add an "applies when" note when a rule is easy to over-apply.
    - If you add a rule that did not come from the source, label it clearly as a KB addition (see Rule zero in `practices/performance.md`).
-4. One skill per `practices/` topic file. If you created `practices/<topic>.md`, add `skills/jdad-<topic>/SKILL.md` with a description that will auto-trigger, and put the rules (or a pointer to `get_practice`) in the body. The `/jdad` command lives in `commands/jdad.md`; do not split it into four command files.
+4. One skill per `practices/` topic file. Until the skill compiler (P1.5) lands, the skill's rule lines must equal the practice file's (`tests/test_kb_schema.py`). If you created `practices/<topic>.md`, add `skills/jdad-<topic>/SKILL.md` with a description that will auto-trigger, and put the rules (or a pointer to `get_practice`) in the body. The `/jdad` command lives in `commands/jdad.md`; do not split it into four command files.
 5. Bump the version in lockstep: `pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json`, and the plugin entry in `.claude-plugin/marketplace.json` (patch for a new source or rule, minor if you add a topic or tool). `./verify` fails if they differ.
 6. Do not put secrets, tokens, keys, or credentials anywhere in this repo. `JDAD_TOKEN` belongs in `/etc/jdad.env` on the host, not here.
 7. Run `uv run jdad lint-kb` (content checks; see `docs/threat-model.md`) and `uv run pytest`, and make sure the new topic or source is reachable through the MCP tools (`list_topics` / `list_sources`, a search or checklist that hits the new rules, and `kb_version` showing the new entry date when the filename is dated).

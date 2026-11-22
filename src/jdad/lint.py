@@ -19,6 +19,16 @@ content that tries to steer an agent rather than inform it:
 - ``encoding``: a file that isn't valid UTF-8.
 - ``file-type``: a file in any KB tree that isn't named ``*.md`` (lowercase).
 
+Structure checks (practices/*.md, docs/kb-schema.md):
+
+- ``tag``: a section with no tag, or a tag outside the known set.
+- ``rule-id``: a rule with no ``{#id}``, a malformed or duplicate ID, or an
+  ID whose first segment differs from the rest of the file's.
+- ``citation``: a rule without ``(src: ...)`` or ``(KB addition)``.
+- ``rule-format``: nested or numbered items, prose in a section, a rule
+  before the first section, or a section with no rules. The parser keeps
+  such text (it isn't dropped from checklists), but the KB must not rely on it.
+
 The last four run on practices/, sources/, skills/ and commands/.
 
 Configuration lives in ``kb-lint.toml`` at the KB root. An exception names
@@ -44,6 +54,8 @@ import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
+
+from jdad.kb import KNOWN_TAGS, RULE_ID_RE, parse_practice
 
 INSTRUCTION_DIRS = ("practices", "sources")
 ALL_DIRS = ("practices", "sources", "skills", "commands")
@@ -300,4 +312,69 @@ def lint_kb(root: Path) -> list[Finding]:
                 findings.append(
                     Finding(rel, 1, "file-type", f"only <name>.md files (lowercase extension, no dotfiles) belong in {name}/")
                 )
+    findings.extend(_structure_findings(root))
     return [f for f in findings if not config.allows(f)]
+
+
+def _structure_findings(root: Path) -> list[Finding]:
+    """Rule-format checks over every top-level practices/*.md (docs/kb-schema.md)."""
+    findings: list[Finding] = []
+    seen_ids: dict[str, str] = {}
+    base = root / "practices"
+    if not base.is_dir():
+        return findings
+    for path in sorted(base.glob("*.md")):
+        if path.is_symlink() or not path.is_file():
+            continue  # reported by the symlink and file-type checks
+        rel = path.relative_to(root).as_posix()
+        try:
+            doc = parse_practice(path, root=root)
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue  # reported by the encoding check
+        lines = doc.text.split("\n")
+
+        def at(line: int, lines: list[str] = lines) -> str:
+            return lines[line - 1].removesuffix("\r") if 0 < line <= len(lines) else ""
+
+        for issue in doc.issues:
+            findings.append(Finding(rel, issue.line, "rule-format", issue.message, issue.text))
+        prefixes: dict[str, int] = {}
+        for section in doc.sections:
+            if not section.tags:
+                findings.append(Finding(rel, section.line, "tag", f"section '{section.heading}' has no [tag]", at(section.line)))
+            for tag in section.tags:
+                if tag not in KNOWN_TAGS:
+                    findings.append(
+                        Finding(rel, section.line, "tag", f"unknown tag [{tag}] (known: {', '.join(KNOWN_TAGS)})", at(section.line))
+                    )
+            for issue in section.issues:
+                findings.append(Finding(rel, issue.line, "rule-format", issue.message, issue.text))
+            if not section.rules:
+                findings.append(Finding(rel, section.line, "rule-format", f"section '{section.heading}' has no rules", at(section.line)))
+            for rule in section.rules:
+                text = at(rule.line)
+                if rule.citation is None:
+                    findings.append(
+                        Finding(rel, rule.line, "citation", "rule has no citation: end it with (src: <source> #n) or (KB addition)", text)
+                    )
+                if not rule.id:
+                    findings.append(Finding(rel, rule.line, "rule-id", "rule has no {#id}", text))
+                    continue
+                if not RULE_ID_RE.match(rule.id):
+                    findings.append(
+                        Finding(rel, rule.line, "rule-id", f"malformed rule ID '{rule.id}' (lowercase segments joined by dots)", text)
+                    )
+                    continue
+                if rule.id in seen_ids:
+                    findings.append(Finding(rel, rule.line, "rule-id", f"duplicate rule ID '{rule.id}' (also at {seen_ids[rule.id]})", text))
+                else:
+                    seen_ids[rule.id] = f"{rel}:{rule.line}"
+                prefix = rule.id.split(".", 1)[0]
+                prefixes.setdefault(prefix, rule.line)
+        if len(prefixes) > 1:
+            first, *others = sorted(prefixes, key=prefixes.get)
+            for prefix in others:
+                findings.append(
+                    Finding(rel, prefixes[prefix], "rule-id", f"rule ID prefix '{prefix}' differs from this file's '{first}'", at(prefixes[prefix]))
+                )
+    return findings
