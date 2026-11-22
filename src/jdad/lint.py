@@ -17,7 +17,7 @@ content that tries to steer an agent rather than inform it:
   render as nothing but are read by agents.
 - ``symlink``: a symlink anywhere in the KB trees.
 - ``encoding``: a file that isn't valid UTF-8.
-- ``file-type``: a file in practices/ or sources/ that isn't ``.md``.
+- ``file-type``: a file in any KB tree that isn't named ``*.md`` (lowercase).
 
 The last four run on practices/, sources/, skills/ and commands/.
 
@@ -78,7 +78,13 @@ _INJECTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
 
 # The whole URL token; the host is taken with urlsplit, never by hand, so
 # userinfo, '#', '?' and '\\' tricks can't make one host look like another.
-_URL_RE = re.compile(r"\b(?:https?://|www\.)[^\s<>()\[\]'\"`]*", re.IGNORECASE)
+# Up to whitespace only, then trailing punctuation is trimmed: stopping at
+# "(" or a quote would let "https://allowed.example(@evil.example" read as
+# the allowed host. The lookbehind (not \b) also catches "_https://...".
+_URL_RE = re.compile(r"(?<![A-Za-z0-9+.-])(?:https?://|www\.)\S+", re.IGNORECASE)
+_URL_TRAILING = ".,;:!?'\")]}>*_`"
+# Characters with no business in the authority of a URL in a KB rule.
+_AUTHORITY_BAD = set("@\\'\"`()[]<>{}|^ ")
 _PIPE_TO_SHELL_RE = re.compile(
     r"\b(curl|wget|fetch|iwr|invoke-webrequest)\b[^\n|]*\|\s*(sudo\s+)?(ba|z|da|k)?sh\b|\|\s*(iex|invoke-expression)\b",
     re.IGNORECASE,
@@ -151,9 +157,13 @@ def _url_problem(url: str, allowed: tuple[str, ...]) -> str | None:
         return f"URL '{url}' contains a backslash (clients disagree on where its host ends)"
     candidate = url if "://" in url else "https://" + url
     try:
-        host = urlsplit(candidate).hostname
+        parts = urlsplit(candidate)
+        host = parts.hostname
     except ValueError:
         return f"URL '{url}' can't be parsed"
+    bad = sorted(set(parts.netloc) & _AUTHORITY_BAD)
+    if bad:
+        return f"URL '{url}' has {''.join(bad)!r} in its host part (userinfo or parser tricks)"
     if not host:
         return f"URL '{url}' has no host"
     host = host.rstrip(".")
@@ -247,7 +257,7 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
                     break
         if top == "practices":
             for match in _URL_RE.finditer(line):
-                problem = _url_problem(match.group(0).rstrip(".,;:!"), config.url_allow)
+                problem = _url_problem(match.group(0).rstrip(_URL_TRAILING), config.url_allow)
                 if problem:
                     findings.append(Finding(rel, number, "url", problem, line))
     if top == "practices":
@@ -274,10 +284,14 @@ def lint_kb(root: Path) -> list[Finding]:
                 continue
             if not path.is_file():
                 continue
-            if path.name.endswith(".md"):
+            # Content checks run on every Markdown file, whatever the case of
+            # its extension, so nothing is skipped silently. Only exact ".md"
+            # names are allowed: the server serves <id>.md, and plugin loaders
+            # differ on case.
+            if path.suffix.lower() == ".md":
                 findings.extend(lint_file(root, path, config))
-            elif name in INSTRUCTION_DIRS:
-                # The server only serves <name>.md here; anything else would be
-                # unlinted content one resolver change away from agents.
-                findings.append(Finding(rel, 1, "file-type", "only .md files belong in practices/ and sources/"))
+            if not path.name.endswith(".md"):
+                findings.append(
+                    Finding(rel, 1, "file-type", f"only .md files (lowercase extension) belong in {name}/")
+                )
     return [f for f in findings if not config.allows(f)]
