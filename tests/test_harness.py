@@ -173,6 +173,10 @@ def test_guard_allows(event: dict) -> None:
         bash("cat <<E\"O\"F\nEOF\nrm -rf build\nE"),  # the delimiter is the whole word EOF
         bash("find . -name '*.pem' | xargs cat"),  # a lister piped on reads the files
         bash("ls > x.pem"),  # a redirect target is never exempt
+        # sixth review round
+        bash("echo a\\ # ; rm -rf build"),  # "#" after an escaped space isn't a comment
+        bash("cat <<\"E\\OF\"\nEOF\nrm -rf build\nE\\OF"),  # backslash in a quoted delimiter: deny
+        bash("cat $(ls *.pem)"),  # a lister inside a substitution: its output is used
         bash("cat .e*"),
         bash("cat *.pem"),
         bash("cp ~/.ssh/id_* /tmp"),
