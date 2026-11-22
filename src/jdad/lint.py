@@ -78,10 +78,16 @@ _INJECTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
 
 # The whole URL token; the host is taken with urlsplit, never by hand, so
 # userinfo, '#', '?' and '\\' tricks can't make one host look like another.
-# Up to whitespace only, then trailing punctuation is trimmed: stopping at
-# "(" or a quote would let "https://allowed.example(@evil.example" read as
-# the allowed host. The lookbehind (not \b) also catches "_https://...".
-_URL_RE = re.compile(r"(?<![A-Za-z0-9+.-])(?:https?://|www\.)\S+", re.IGNORECASE)
+# Every occurrence of a scheme starts a URL, wherever it sits (inside a word
+# or inside another URL's path), and runs to whitespace; trailing punctuation
+# is then trimmed. So "[x](https://ok.example)(https://evil.example)" checks
+# both hosts, and stopping at "(" can't make
+# "https://ok.example(@evil.example" read as ok.example. Bare "www." needs a
+# non-host character before it.
+# Zero-width lookahead, so matches may overlap: a URL inside another URL's
+# token is still its own match.
+_URL_RE = re.compile(r"(?=(https?://\S*|(?<![A-Za-z0-9.-])www\.\S+))", re.IGNORECASE)
+_MD_NAME_RE = re.compile(r"[^./][^/]*\.md")
 _URL_TRAILING = ".,;:!?'\")]}>*_`"
 # Characters with no business in the authority of a URL in a KB rule.
 _AUTHORITY_BAD = set("@\\'\"`()[]<>{}|^ ")
@@ -257,7 +263,7 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
                     break
         if top == "practices":
             for match in _URL_RE.finditer(line):
-                problem = _url_problem(match.group(0).rstrip(_URL_TRAILING), config.url_allow)
+                problem = _url_problem(match.group(1).rstrip(_URL_TRAILING), config.url_allow)
                 if problem:
                     findings.append(Finding(rel, number, "url", problem, line))
     if top == "practices":
@@ -288,10 +294,10 @@ def lint_kb(root: Path) -> list[Finding]:
             # its extension, so nothing is skipped silently. Only exact ".md"
             # names are allowed: the server serves <id>.md, and plugin loaders
             # differ on case.
-            if path.suffix.lower() == ".md":
+            if path.name.lower().endswith(".md"):
                 findings.extend(lint_file(root, path, config))
-            if not path.name.endswith(".md"):
+            if not _MD_NAME_RE.fullmatch(path.name):
                 findings.append(
-                    Finding(rel, 1, "file-type", f"only .md files (lowercase extension) belong in {name}/")
+                    Finding(rel, 1, "file-type", f"only <name>.md files (lowercase extension, no dotfiles) belong in {name}/")
                 )
     return [f for f in findings if not config.allows(f)]
