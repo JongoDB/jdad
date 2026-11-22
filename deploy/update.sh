@@ -1,46 +1,43 @@
 #!/usr/bin/env bash
 # Idempotent update for a JDAD checkout on the LXC host.
-# git pull --ff-only, sync deps and restart only when HEAD changes,
-# and start the service if it is not already running.
+# git pull --ff-only (as the jdad user), sync deps and restart only when
+# HEAD changes, and start the service if it is not already running.
 set -euo pipefail
 
-ROOT="${JDAD_ROOT:-/opt/jdad}"
-SERVICE="${JDAD_SERVICE:-jdad.service}"
+cd "$(dirname "$0")"
+# shellcheck source=common.sh
+source "$(dirname "$0")/common.sh"
 
-if ! command -v uv >/dev/null 2>&1; then
-  echo "jdad: uv is not on PATH; install uv before running update.sh" >&2
+UV="$(resolve_uv)"
+
+if [[ ! -d "$JDAD_ROOT/.git" ]]; then
+  echo "jdad: no git checkout at $JDAD_ROOT" >&2
   exit 1
 fi
 
-if [[ ! -d "$ROOT/.git" ]]; then
-  echo "jdad: no git checkout at $ROOT" >&2
-  exit 1
-fi
-
-cd "$ROOT"
-before="$(git rev-parse HEAD)"
-git fetch --prune
-git pull --ff-only
-after="$(git rev-parse HEAD)"
+before="$(run_as_jdad git -C "$JDAD_ROOT" rev-parse HEAD)"
+run_as_jdad git -C "$JDAD_ROOT" fetch --prune
+run_as_jdad git -C "$JDAD_ROOT" pull --ff-only
+after="$(run_as_jdad git -C "$JDAD_ROOT" rev-parse HEAD)"
 
 sync_deps() {
-  uv sync --frozen --no-dev
+  run_as_jdad env UV_PYTHON_PREFERENCE=only-system "$UV" --directory "$JDAD_ROOT" sync --frozen --no-dev
 }
 
 service_active() {
-  systemctl is-active --quiet "$SERVICE"
+  systemctl is-active --quiet "$JDAD_SERVICE"
 }
 
 if ! service_active; then
   sync_deps
-  systemctl start "$SERVICE"
-  echo "jdad: started $SERVICE at $after"
+  systemctl start "$JDAD_SERVICE"
+  echo "jdad: started $JDAD_SERVICE at $after"
 elif [[ "$before" != "$after" ]]; then
   sync_deps
-  systemctl restart "$SERVICE"
-  echo "jdad: updated $before -> $after and restarted $SERVICE"
+  systemctl restart "$JDAD_SERVICE"
+  echo "jdad: updated $before -> $after and restarted $JDAD_SERVICE"
 else
   echo "jdad: already up to date at $after"
 fi
 
-systemctl is-active --quiet "$SERVICE"
+systemctl is-active --quiet "$JDAD_SERVICE"

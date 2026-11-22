@@ -128,28 +128,32 @@ Stdio still works if you would rather run the server locally, including `uvx --f
 
 ## Deploy on the LXC
 
-The unit assumes a checkout at `/opt/jdad` and a `jdad` user. Adjust paths if needed.
+`deploy/install.sh` is idempotent and is the supported first-time (and repair) path. Run it as root. It will:
 
-The unit binds to `0.0.0.0:8765` as user `jdad` and enables `NoNewPrivileges`, `ProtectSystem=strict` (with `ReadWritePaths` for the checkout), `PrivateTmp`, and `ProtectHome`. Set `JDAD_TOKEN` in `/etc/jdad.env` before starting; without it the process will refuse that bind.
+- create the system user `jdad` if it does not exist (home `/opt/jdad`, nologin)
+- clone the repo into `/opt/jdad` as that user (`sudo -u jdad git clone`), and `chown` the checkout to `jdad` if it already exists
+- run `uv sync --frozen --no-dev` as `jdad` with `UV_PYTHON_PREFERENCE=only-system`, so the venv is `/opt/jdad/.venv` (not under `/root` or `/home`)
+- install `/etc/jdad.env` at mode `0600` with the `JDAD_TOKEN=` placeholder only, and leave an existing env file alone
+- install and `enable` the systemd unit. It starts the service only when `JDAD_TOKEN` is already set; otherwise it prints the command to start after you fill in the token
+
+The `jdad` user needs git access to this private repo (a deploy key under `/opt/jdad/.ssh`, or equivalent). Install `uv` in a location the root path can see, typically `/usr/local/bin/uv`. `update.sh` / `install.sh` also look at `command -v uv`, then `/usr/local/bin/uv` and `~jdad/.local/bin/uv`, or an explicit `UV=/absolute/path/to/uv`.
+
+The unit binds to `0.0.0.0:8765` as user `jdad`, with `UV_PYTHON_PREFERENCE=only-system`, `NoNewPrivileges`, `ProtectSystem=strict`, `ReadOnlyPaths=/opt/jdad`, `PrivateTmp`, and `ProtectHome=true`. Set `JDAD_TOKEN` in `/etc/jdad.env` before starting; without it the process will refuse that bind.
 
 ```bash
-sudo git clone git@github.com:JongoDB/jdad.git /opt/jdad
-cd /opt/jdad
-sudo uv sync --frozen --no-dev
-sudo install -d -m 0755 /etc
-sudo cp deploy/jdad.env.example /etc/jdad.env
+# from a checkout of this repo, or after copying deploy/ onto the host
+sudo ./deploy/install.sh
+# or: sudo JDAD_REPO=git@github.com:JongoDB/jdad.git ./deploy/install.sh
 sudo chmod 0600 /etc/jdad.env
-# edit /etc/jdad.env and set JDAD_TOKEN (required for the 0.0.0.0 unit)
-sudo cp deploy/jdad.service /etc/systemd/system/jdad.service
-sudo systemctl daemon-reload
-sudo systemctl enable --now jdad.service
+sudo editor /etc/jdad.env   # set JDAD_TOKEN; do not commit this file
+sudo systemctl start jdad.service
 curl -fsS http://127.0.0.1:8765/healthz
 ```
 
-`deploy/update.sh` is idempotent: it requires `uv` on `PATH` (and exits if it is missing), then `git pull --ff-only`, runs `uv sync --frozen --no-dev` and restarts only when HEAD changes, and starts the service if it is down. Run it from cron or by hand as root (or a user that can `systemctl` this unit):
+`deploy/update.sh` is idempotent: it resolves `uv` as above, runs `git` as the `jdad` user (`git pull --ff-only`), syncs deps as `jdad`, restarts only when HEAD changes, and starts the service if it is down. Run it as root (or a user that can `systemctl` this unit and `sudo -u jdad`):
 
 ```bash
-sudo JDAD_ROOT=/opt/jdad deploy/update.sh
+sudo ./deploy/update.sh
 ```
 
 ## Development
@@ -159,4 +163,4 @@ uv sync
 ./verify
 ```
 
-`./verify` runs ruff, pytest, `uv build`, and `claude plugin validate` when the Claude CLI is on `PATH` (it skips that last step with a note when it isn't). The same script is the GitHub Actions check on pull requests and on pushes to `main`.
+`./verify` runs ruff, pytest, `uv build`, and `claude plugin validate` when the Claude CLI is on `PATH` (it skips that last step with a note when it isn't). GitHub Actions is set up to run the same script on pull requests and on pushes to `main`, with `permissions: contents: read` and actions pinned to SHAs. That check is currently billing-blocked on this repo (red check; the job never starts), so local `./verify` is the proof until billing is fixed.
