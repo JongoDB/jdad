@@ -528,11 +528,24 @@ def test_multi_parameter_generics_count_as_html_by_design(tmp_path: Path) -> Non
     assert ("html", "practices/clean.md", 5) in checks(root)
 
 
-def test_autolinks_are_not_html_but_are_still_url_checked(tmp_path: Path) -> None:
-    body = "- See <https://evil-example.com/x> or <ops@evil-example.com>. (src: x #2)\n"
+def test_http_autolinks_are_not_html_but_are_still_url_checked(tmp_path: Path) -> None:
+    body = "- See <https://evil-example.com/x> first. (src: x #2)\n"
     found = checks(make_kb(tmp_path, {"practices/clean.md": CLEAN_PRACTICE + body}))
     assert ("html", "practices/clean.md", 5) not in found
     assert ("url", "practices/clean.md", 5) in found
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "- Speed. <svg/onload=alert`1`@x.example> (src: x #2)\n",  # parses as an email autolink
+        "- `<img/src=x/onerror=go`1`@a.example>` (src: x #2)\n",
+        "- Mail <ops@x.example> for access. (src: x #2)\n",  # email autolinks aren't exempt
+    ],
+)
+def test_only_http_autolinks_are_exempt_from_html(tmp_path: Path, body: str) -> None:
+    root = make_kb(tmp_path, {"practices/clean.md": CLEAN_PRACTICE + body})
+    assert ("html", "practices/clean.md", 5) in checks(root), checks(root)
 
 
 
