@@ -10,3 +10,7 @@ build/
 .coverage
 htmlcov/
 .DS_Store
+
+# Claude Code session transcripts and agent logs never go in this repo (docs/ingestion.md).
+.claude/projects/
+.remember/
