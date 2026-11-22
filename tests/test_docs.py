@@ -75,6 +75,11 @@ ESCAPE_HATCH_RE = re.compile(
 )
 
 
+# "unverified" is only allowed as the reason an item stays open, e.g.
+# "without a CLI the item stays open as runtime unverified".
+KEEPS_OPEN_RE = re.compile(r"\bstays? open as runtime unverified\b")
+
+
 def test_acceptance_has_no_escape_hatches() -> None:
     bad = []
     for item_id, *_, body in _items():
@@ -83,7 +88,7 @@ def test_acceptance_has_no_escape_hatches() -> None:
                 continue
             if ESCAPE_HATCH_RE.search(line):
                 bad.append(item_id)
-            elif "unverified" in line and "stay" not in line:
+            elif line.count("unverified") != len(KEEPS_OPEN_RE.findall(line)):
                 bad.append(item_id)  # runtime gaps must keep the item open
     assert not bad, f"acceptance criteria that let 'unverified' count as done: {bad}"
 

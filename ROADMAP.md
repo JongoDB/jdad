@@ -21,7 +21,7 @@ Legend: **Needs Jon** = needs a decision, access, or money from Jon before or du
 
 - [x] **P0.1 Knowledge base seed** (d104c73): `sources/` + `practices/performance.md` from the breakingbreach performance reel.
 - [x] **P0.2 MCP server, HTTP transport, Claude Code plugin** (#1, JON-1330): `jdad-mcp` with 7 read-only tools, `kb://practices/{name}`, `apply-kb` prompt, bearer auth, host allowlist, `/jdad plan|review|perf|add`, `jdad-performance` skill, `./verify`, systemd deploy.
-- [ ] **P0.3 Docker deploy merged** (#2, in review): out of scope for this roadmap PR. Acceptance: #2 is merged to `main` with `./verify` passing at the merge commit. Merging doesn't mean deployed; that is P0.5.
+- [x] **P0.3 Docker deploy merged** (#2, 2022a8a). Acceptance: #2 is merged to `main` (merge commit 2022a8a), and the full `./verify`, including `tests/test_docker.sh`, passes on this roadmap PR's head after it merges `main`. Merging doesn't mean deployed; that is P0.5.
 - [x] **P0.4 Roadmap, vision, research, ADRs** (this PR).
 - [ ] **P0.5 Hosted endpoint deployed and proven** ([ADR 0005](docs/adr/0005-hosted-deploy-cloudflare-full-strict.md))
   - Acceptance: on the droplet, the running container's `JDAD_GIT_SHA` equals `main`'s head SHA; through `https://jdad-mcp.jondevs.com/mcp` with a valid token, `initialize`, `tools/list` and one `tools/call` return 200; with no token, 401; a request with a non-allowlisted `Host` gets 421 at the origin; `curl` with the Cloudflare Origin CA root as `--cacert` verifies the origin certificate; Cloudflare's SSL mode for the host is Full (strict). Tokens redacted in the PR. When this passes, ADR 0005 moves to Accepted.
@@ -34,8 +34,8 @@ Goal: before adding features, make the repo itself cross-tool and give the KB an
 - [ ] **P1.1 AGENTS.md becomes the canonical instructions file**
   - Goal: Codex, Cursor and Grok Build read the full repo rules, not just Claude Code. ([ADR 0004](docs/adr/0004-agents-md-canonical-instructions.md))
   - Deliverables: move the rules from `CLAUDE.md` into `AGENTS.md`; `CLAUDE.md` becomes `@AGENTS.md` plus Claude-only notes (plugin validate, `userConfig`); a test that enforces the sizes below.
-  - Acceptance: `AGENTS.md` ≤ 120 lines and < 32 KiB; `CLAUDE.md` ≤ 40 lines and contains `@AGENTS.md`; every normative rule has an ID (`R-<area>-<n>`) listed in a table in `AGENTS.md`, and a test asserts each ID appears in exactly one of `AGENTS.md` or `CLAUDE.md`'s "Claude-only" section; `./verify` passes. Runtime: a no-network discovery run on one installed CLI (`grok inspect --json` or `codex` debug output) lists `AGENTS.md`; without it the item stays open as runtime unverified.
-  - Depends on: #2 merged (both PRs edit `CLAUDE.md`).
+  - Acceptance: `AGENTS.md` ≤ 120 lines and < 32 KiB; `CLAUDE.md` ≤ 40 lines and contains `@AGENTS.md`; every normative rule has an ID (`R-<area>-<n>`) listed in a table in `AGENTS.md`, and a test asserts each ID appears in exactly one of `AGENTS.md` or `CLAUDE.md`'s "Claude-only" section; `./verify` passes. Runtime: on one installed CLI, a discovery run lists `AGENTS.md`: either `grok inspect --json` output names it, or `codex -c log_dir=./.codex-log --ask-for-approval never "Show which instruction files are active."` run from the repo root leaves `./.codex-log/codex-tui.log` containing `AGENTS.md` (the audit method in Codex's AGENTS.md guide); without it the item stays open as runtime unverified.
+  - Depends on: P0.3 (done; both PRs edit `CLAUDE.md`).
 - [ ] **P1.2 Practice schema and stable rule IDs**
   - Goal: every rule is addressable, so checklists, reviews and dedupe can cite `perf.db.n-plus-one` instead of a bullet's position.
   - Deliverables: `docs/kb-schema.md` (rule ID format, required tag, `src:` citation, optional `applies-when`, `origin: source|kb-addition`); migrate `practices/performance.md`; `jdad lint-kb` command (stdlib only) wired into `./verify`; `kb.py` parses IDs.
@@ -107,7 +107,7 @@ Goal: richer, still read-only and offline tools. ([ADR 0003](docs/adr/0003-stdio
   - Depends on: P1.2.
 - [ ] **P3.4 `review_against_kb` tool and prompt**
   - Deliverables: `review_against_kb(changed_files: list[str], summary: str, tags?: list[str])` returns the applicable rules (inferred from file types and tags), a review rubric (correctness first, "skip style"), and a required findings format (rule ID, file, evidence, severity). The server does no model calls; the calling agent does the review. A matching `review-against-kb` prompt.
-  - Acceptance: tests show tag inference for frontend, backend, db and infra file sets; output contains only rules whose tags match; `/jdad review` uses it.
+  - Acceptance: tests show tag inference for frontend, backend, db and infra file sets; output contains only rules whose tags match; a test on `commands/jdad.md` asserts the `review` section tells the agent to call `review_against_kb` and to report findings in its rule-ID / file / evidence / severity format.
   - Depends on: P3.3.
 - [ ] **P3.5 Templates as resources and `bootstrap_repo`**
   - Deliverables: `kb://templates/{path}` resources for every harness template; `bootstrap_repo(tools, stack)` returns a manifest of `{path, content, mode}` for the client to write. The server writes nothing.
@@ -120,7 +120,7 @@ Goal: richer, still read-only and offline tools. ([ADR 0003](docs/adr/0003-stdio
 - [ ] **P3.7 Token UX via plugin `userConfig`**
   - Deliverables: Claude plugin `userConfig.jdad_token` with `sensitive: true`, used in the MCP header; README update; env-var path kept as fallback.
   - Acceptance: `claude plugin validate .` exits 0. Runtime: with an ephemeral, local-only test token (generated for the run, never a real JDAD token), a local server shows 200 for the prompted token and 401 for a missing or wrong token; the PR shows a transcript with the token redacted; `grep` for the token value over server logs and the PR body finds nothing; the test token is then destroyed. Without a Claude CLI the item stays open as runtime unverified.
-  - Depends on: #2 merged.
+  - Depends on: P0.3.
 
 ## Phase 4: Harness templates and `jdad init`
 
@@ -161,7 +161,7 @@ Goal: the verify/CI, security, observability and performance opinions as KB rule
   - Depends on: P2.3, P4.2.
 - [ ] **P5.3 Security review skills**
   - Deliverables: `catalog/skills/jdad-security-review/` that runs the KB checklist and recommends Trail of Bits' `differential-review`, `insecure-defaults` and `supply-chain-risk-auditor`; optional CI job using `anthropics/claude-code-security-review`. Any third-party skill or action gets a recorded review before a template recommends it.
-  - Acceptance: skill passes the validator; the CI job is opt-in and documented; the review notes for each recommended third-party item are linked.
+  - Acceptance: skill passes the validator; the CI job runs only when the repo variable `JDAD_SECURITY_REVIEW` is `true` (a test on the workflow template asserts the job's `if:` checks it, and `actionlint` passes); `catalog/skills/jdad-security-review/SKILL.md` has an "Enable the CI job" section naming that variable and the API-key secret the action needs; the review notes for each recommended third-party item are linked.
   - Depends on: P5.2.
 - [ ] **P5.4 Observability defaults**
   - Deliverables: `practices/observability.md` (OpenTelemetry traces, structured JSON logs with request IDs, `/healthz` and `/readyz`, RED metrics, error tracking, local logs an agent can query); per-stack snippets in templates.
@@ -218,7 +218,7 @@ Goal: prove the opinions improve agent output, and catch regressions when the KB
 - [ ] **P7.4 Grok Build install proof**
   - Deliverables: install the existing Claude marketplace with `grok plugin marketplace add`, capture `grok inspect --json`; add a `.grok-plugin/marketplace.json` only if the Claude one doesn't load.
   - Acceptance: `grok inspect --json` output in the PR shows the JDAD skills and MCP server.
-  - Depends on: #2 merged. **Needs Jon:** a host with Grok Build installed and logged in.
+  - Depends on: P0.3. **Needs Jon:** a host with Grok Build installed and logged in.
 - [ ] **P7.5 Install matrix and smoke scripts**
   - Deliverables: `docs/install.md` table (tool × install command × token setup × verify command); `scripts/smoke-<tool>.sh` that checks the MCP connection.
   - Acceptance: `docs/install.md` has 4 rows (Claude Code, Codex, Grok Build, Cursor); a smoke script exits 0 only after `initialize`, `tools/list` and a `kb_version` call succeed against the test server; the item is ticked only when all 4 tools have a green run attached.
