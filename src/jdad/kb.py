@@ -154,6 +154,11 @@ class Rule:
     applies_when: str | None
     tags: tuple[str, ...]
     line: int
+    last_line: int = 0
+
+    @property
+    def spans_lines(self) -> bool:
+        return self.last_line > self.line
 
     @property
     def origin(self) -> str | None:
@@ -205,7 +210,7 @@ class Section:
         return extract_bullets(self.body)
 
 
-def _finish_rule(raw: str, applies: str | None, tags: tuple[str, ...], line: int) -> Rule:
+def _finish_rule(raw: str, applies: str | None, tags: tuple[str, ...], line: int, last_line: int = 0) -> Rule:
     text = " ".join(raw.split())
     rule_id = None
     match = _RULE_ID_SUFFIX_RE.search(text)
@@ -224,6 +229,7 @@ def _finish_rule(raw: str, applies: str | None, tags: tuple[str, ...], line: int
         applies_when=" ".join(applies.split()) if applies else None,
         tags=tags,
         line=line,
+        last_line=max(last_line, line),
     )
 
 
@@ -243,7 +249,7 @@ def parse_rules(
     def close() -> None:
         nonlocal current
         if current is not None:
-            rules.append(_finish_rule(current["raw"], current["applies"], tags, current["line"]))
+            rules.append(_finish_rule(current["raw"], current["applies"], tags, current["line"], current["last"]))
             current = None
 
     for number, line in lines:
@@ -256,14 +262,16 @@ def parse_rules(
             close()
             if numbered:
                 issues.append(ParseIssue(number, "numbered", "numbered item: use a '- ' bullet", line))
-            current = {"raw": (start or numbered).group(1), "applies": None, "line": number}
+            current = {"raw": (start or numbered).group(1), "applies": None, "line": number, "last": number}
             continue
         if line[:1].isspace():
             applies = _APPLIES_RE.match(line)
             nested = _NESTED_BULLET_RE.match(line) or _NUMBERED_RE.match(line)
             if current is None:
                 issues.append(ParseIssue(number, "stray-text", "indented text that belongs to no rule", line))
-            elif applies:
+                continue
+            current["last"] = number
+            if applies:
                 current["applies"] = applies.group(1)
             elif nested:
                 issues.append(

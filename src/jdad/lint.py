@@ -316,6 +316,25 @@ def lint_kb(root: Path) -> list[Finding]:
     return [f for f in findings if not config.allows(f)]
 
 
+def _assembled_rule_findings(rel: str, rule) -> list[Finding]:
+    """Content checks on a multi-line rule as agents see it (one joined line).
+
+    The per-line checks can't see a phrase split across continuation lines
+    ("Ignore previous" / "instructions"), but the checklist shows it joined.
+    Exceptions can't be pinned to this text; split the rule differently.
+    """
+    joined = rule.checklist_line()
+    span = f"lines {rule.line}-{rule.last_line}"
+    found: list[Finding] = []
+    for pattern, why in _INJECTION_PATTERNS:
+        if pattern.search(joined):
+            found.append(Finding(rel, rule.line, "injection", f"agent-directed text in the joined rule ({span}): {why}", joined))
+            break
+    if _PIPE_TO_SHELL_RE.search(joined):
+        found.append(Finding(rel, rule.line, "shell", f"the joined rule ({span}) pipes a download into a shell", joined))
+    return found
+
+
 def _structure_findings(root: Path) -> list[Finding]:
     """Rule-format checks over every top-level practices/*.md (docs/kb-schema.md)."""
     findings: list[Finding] = []
@@ -353,6 +372,8 @@ def _structure_findings(root: Path) -> list[Finding]:
                 findings.append(Finding(rel, section.line, "rule-format", f"section '{section.heading}' has no rules", at(section.line)))
             for rule in section.rules:
                 text = at(rule.line)
+                if rule.spans_lines:
+                    findings.extend(_assembled_rule_findings(rel, rule))
                 if rule.citation is None:
                     findings.append(
                         Finding(rel, rule.line, "citation", "rule has no citation: end it with (src: <source> #n) or (KB addition)", text)
