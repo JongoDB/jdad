@@ -50,7 +50,7 @@ Searched with `git log --all -p` over every blob in history.
 **History is the problem, not `HEAD`.** Moving a file out of the repo after the fact doesn't unpublish it: every commit stays readable once the repo is public. The real choices are to fix first, or to rewrite history, and the brief rules out a rewrite without a decision.
 
 - **H3** (`docs/reviews/2026-11-22-red-team.md`, on `main` since caf3d94) explains that the origin answers on 443 from anywhere and that the certificate SAN lets scanners link the IP to the zone. **M3** gives the symlink path through `_resolve_file` and the listing tools.
-- **`docs/evidence/p0.5/droplet.txt`** (PR #5, not merged, but its branch becomes public too) has the certificate's exact SHA-256 fingerprint. That is the search key to find the droplet's IP in internet-wide scan data while 443 is open.
+- **`docs/evidence/p0.5/droplet.txt`** (PR #5, merged as 3c813cf) has the certificate's exact SHA-256 fingerprint. That is the search key to find the droplet's IP in internet-wide scan data while 443 is open.
 - **M3** needs repo write access to exploit, and PR #8 removes it (the resolver serves only `<id>.md`, symlinks fail the lint, listing tools are linted). Low risk once #8 merges.
 - **H3** matters until the host firewall from PR #7 is applied and checked from outside. After that, a non-Cloudflare client can't complete a handshake, so the report and the fingerprint describe a closed path. The IP may already be in scan history, but it no longer answers.
 
@@ -60,7 +60,7 @@ Searched with `git log --all -p` over every blob in history.
    - PR #7 is merged, Daisy has applied `deploy/firewall-cloudflare.sh install` on the droplet, and the "from outside Cloudflare, 443 times out" check in PR #7 passes over IPv4 (and IPv6 if the droplet has it).
    - PR #8 is merged (H4, which also closes M3's path).
    - Then add one line under H3 and M3 in the red-team report: "Fixed in #7 (firewall applied <date>) / #8". No redaction needed.
-2. **PR #5 (Daisy's):** before merging, consider replacing the certificate fingerprint and the two public-key hashes in `droplet.txt` with a sentence ("the certificate's public key matches the key file; fingerprint recorded off-repo"). They prove nothing that sentence doesn't, and they're the scan-search key. This is optional once step 1 is done, and it's Daisy's PR.
+2. **PR #5 merged** (3c813cf, after this scrub was first written), so the certificate fingerprint and public-key hashes in `docs/evidence/p0.5/droplet.txt` are now on `main` and in history. Redacting them in `HEAD` wouldn't unpublish them, so step 1 (firewall applied and checked) is what makes them harmless. No further action.
 3. **If Jon wants the repo public before step 1:** the only clean option is a history rewrite to drop the red-team report and the evidence branch. That's destructive and needs Jon's explicit decision. I don't recommend it; waiting for #7 and #8 is shorter.
 4. **Licence** (Jon's call; doesn't block going public) and the **verbatim-sources rule** change (P1.3).
 5. **Right after the switch:** apply the `main` ruleset and start the bot-identity work in [docs/ops/github-protection-plan.md](../ops/github-protection-plan.md). Branch protection is free only once the repo is public, and until then "nobody merges their own PR" is policy only.
