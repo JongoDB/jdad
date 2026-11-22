@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Idempotent update for the JDAD Docker deploy on the droplet.
-# Prechecks the env file, the Origin cert/key pair and the container
-# uid, git pull --ff-only, rebuild and restart the compose service
-# (project name "jdad"), then require a local HTTPS /healthz of 200.
+# Prechecks the token file, the env file, the Origin cert/key pair and the
+# container uid, git pull --ff-only, rebuild and restart the compose
+# service (project name "jdad"), then require a local HTTPS /healthz of 200
+# that verifies the origin certificate (no -k) for the public hostname.
 # Rolls back to the previous image tag if the health check fails, and
 # prunes old jdad:<sha> images (keeping the current and previous ones)
 # after a healthy update. Fails loudly on any step.
@@ -19,6 +20,10 @@ cd "$ROOT"
 source "$HERE/common.sh"
 
 ENV_FILE="${JDAD_ENV_FILE:-$HOME/.config/jdad/jdad.env}"
+TOKEN_FILE="${JDAD_TOKEN_FILE_HOST:-$HOME/.config/jdad/token}"
+# The name the origin certificate must be valid for; the health probe
+# connects to 127.0.0.1 but verifies the certificate for this name.
+HEALTH_HOST="${JDAD_HEALTH_HOST:-jdad-mcp.jondevs.com}"
 TLS_DIR="${JDAD_TLS_DIR:-$HOME/.config/jdad/tls}"
 CERT_FILE="${JDAD_SSL_CERTFILE_HOST:-$TLS_DIR/origin.crt}"
 KEY_FILE="${JDAD_SSL_KEYFILE_HOST:-$TLS_DIR/origin.key}"
@@ -26,6 +31,7 @@ PROJECT="${JDAD_COMPOSE_PROJECT:-jdad}"
 COMPOSE=(docker compose -p "$PROJECT" -f "$HERE/docker-compose.yml")
 IMAGE_REPO="${JDAD_IMAGE_REPO:-jdad}"
 export JDAD_IMAGE_REPO="$IMAGE_REPO"
+export JDAD_TOKEN_FILE_HOST="$TOKEN_FILE"
 
 # Check for a checkout before any git command, so a plain copy gets one
 # clear error instead of git's "fatal: not a git repository" first.
@@ -55,17 +61,12 @@ if ! command -v openssl >/dev/null 2>&1; then
   exit 1
 fi
 
-# The URL for /healthz on the published port. JDAD_HEALTH_URL overrides
-# it; otherwise ask compose which host port maps to 8443 (443 in prod,
-# an ephemeral port in tests), falling back to JDAD_PUBLISH or 443.
-# Returns 1 with no output when no port is known (for example a
-# restart-looping container on an ephemeral port), so callers fail
-# closed instead of probing some other service on 443.
-health_url() {
-  if [[ -n "${JDAD_HEALTH_URL:-}" ]]; then
-    printf '%s\n' "$JDAD_HEALTH_URL"
-    return
-  fi
+# The host port that maps to 8443 (443 in prod, an ephemeral port in
+# tests): ask compose, falling back to JDAD_PUBLISH or 443. Returns 1 with
+# no output when no port is known (for example a restart-looping container
+# on an ephemeral port), so callers fail closed instead of probing some
+# other service on 443.
+health_port() {
   local mapped port=""
   mapped="$("${COMPOSE[@]}" port jdad 8443 2>/dev/null | head -n1 || true)"
   if [[ -n "$mapped" ]]; then
@@ -78,18 +79,43 @@ health_url() {
   if [[ -z "$port" ]]; then
     return 1
   fi
-  printf 'https://127.0.0.1:%s/healthz\n' "$port"
+  printf '%s\n' "$port"
+}
+
+# The URL for /healthz, for messages and for the JDAD_HEALTH_URL override.
+health_url() {
+  if [[ -n "${JDAD_HEALTH_URL:-}" ]]; then
+    printf '%s\n' "$JDAD_HEALTH_URL"
+    return
+  fi
+  local port
+  port="$(health_port)" || return 1
+  printf 'https://%s:%s/healthz (via 127.0.0.1)\n' "$HEALTH_HOST" "$port"
 }
 
 precheck_env() {
   if [[ ! -f "$ENV_FILE" ]]; then
-    echo "jdad: env file $ENV_FILE is missing (mode 0600; must set a non-empty JDAD_TOKEN)" >&2
+    echo "jdad: env file $ENV_FILE is missing (mode 0600; holds JDAD_ALLOWED_HOSTS, not the token)" >&2
     return 1
   fi
-  local token
-  token="$(parse_jdad_token "$ENV_FILE")"
-  if [[ -z "$token" ]]; then
-    echo "jdad: JDAD_TOKEN in $ENV_FILE is empty or quoted-empty; refusing to update" >&2
+  if [[ -n "$(parse_jdad_token "$ENV_FILE")" ]]; then
+    echo "jdad: $ENV_FILE still sets JDAD_TOKEN. The token now lives in $TOKEN_FILE so it isn't visible in 'docker inspect'. Run ./deploy/migrate-token.sh, then re-run this script." >&2
+    return 1
+  fi
+  if [[ ! -f "$TOKEN_FILE" || -L "$TOKEN_FILE" ]]; then
+    echo "jdad: token file $TOKEN_FILE is missing or a symlink (see ./deploy/migrate-token.sh, or the README to create one)" >&2
+    return 1
+  fi
+  if [[ "$(file_owner_uid "$TOKEN_FILE")" != "$JDAD_UID" ]]; then
+    echo "jdad: token file $TOKEN_FILE must be owned by uid $JDAD_UID, the uid the container runs as" >&2
+    return 1
+  fi
+  if ! mode_is_private "$TOKEN_FILE"; then
+    echo "jdad: token file $TOKEN_FILE is readable by group or others (mode $(file_mode "$TOKEN_FILE")); chmod 400" >&2
+    return 1
+  fi
+  if [[ -z "$(tr -d '[:space:]\"'"'"'' < "$TOKEN_FILE")" ]]; then
+    echo "jdad: token file $TOKEN_FILE is empty; refusing to update" >&2
     return 1
   fi
   if [[ ! -f "$CERT_FILE" ]]; then
@@ -118,11 +144,8 @@ precheck_env() {
     echo "jdad: $KEY_FILE does not match the public key in $CERT_FILE; refusing to update" >&2
     return 1
   fi
-  local mode others
-  mode="$(stat -c '%a' "$KEY_FILE")"
-  others=$((10#${mode: -1}))
-  if (( others != 0 )); then
-    echo "jdad: $KEY_FILE is world-accessible (mode $mode); chmod 400 or 600 so only the container uid can read it" >&2
+  if ! mode_is_private "$KEY_FILE"; then
+    echo "jdad: $KEY_FILE is readable by group or others (mode $(file_mode "$KEY_FILE")); chmod 400 or 600 so only the container uid can read it" >&2
     return 1
   fi
 }
@@ -135,17 +158,24 @@ precheck_uid() {
 }
 
 probe_health() {
-  local body url
-  if ! url="$(health_url)"; then
+  local body port
+  local -a target
+  if [[ -n "${JDAD_HEALTH_URL:-}" ]]; then
+    target=("$JDAD_HEALTH_URL")
+  elif port="$(health_port)"; then
+    # Connect to 127.0.0.1 but send SNI and Host for the public name, and
+    # trust only the origin certificate on disk (curl accepts a leaf as the
+    # anchor). A wrong, expired or mismatched certificate fails here and the
+    # update rolls back. No -k.
+    target=(--resolve "$HEALTH_HOST:$port:127.0.0.1" "https://$HEALTH_HOST:$port/healthz")
+  else
     return 1  # no published port yet: unhealthy, nothing probed
   fi
-  # -k: the Origin CA (or a local self-signed cert) is not in the public
-  # trust store, and this probe hits 127.0.0.1 rather than the hostname.
-  if body="$(curl -fsSk --max-time 5 "$url")"; then
+  if body="$(curl -fsS --max-time 5 --cacert "$CERT_FILE" "${target[@]}" 2>"$HEALTH_ERR")"; then
     if [[ "$body" == '{"status":"ok"}' ]]; then
       return 0
     fi
-    echo "jdad: $url returned unexpected body: $body" >&2
+    echo "jdad: $(health_url) returned unexpected body: $body" >&2
     return 1
   fi
   return 1
@@ -159,6 +189,9 @@ wait_for_health() {
     sleep 1
   done
   echo "jdad: $(health_url || echo '/healthz (no published port)') did not return 200 {\"status\":\"ok\"} after waiting" >&2
+  if [[ -s "$HEALTH_ERR" ]]; then
+    echo "jdad: last curl error: $(head -n 1 "$HEALTH_ERR")" >&2
+  fi
   return 1
 }
 
@@ -209,8 +242,11 @@ prune_images() {
   done < <(docker image ls "$IMAGE_REPO" --format '{{.Tag}}')
 }
 
-precheck_env
+HEALTH_ERR="$(mktemp)"
+trap 'rm -f "$HEALTH_ERR"' EXIT
+
 precheck_uid
+precheck_env
 
 before="$(git -C "$ROOT" rev-parse HEAD)"
 previous_image="$(current_image_ref || true)"
