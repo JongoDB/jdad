@@ -139,3 +139,21 @@ def test_regular_files_still_resolve_case_insensitively(tmp_path: Path) -> None:
     assert kb.get_practice("good").startswith("# Good")
     assert kb.get_practice("GOOD").startswith("# Good")
     assert kb.get_practice("practices/good.md").startswith("# Good")
+
+
+def test_one_bad_file_does_not_break_listings(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
+    """Checker on #8 (M3's other half): a non-UTF-8 practice or source used to
+    make list_topics, get_checklist and list_sources raise."""
+    root = make_kb(tmp_path)
+    (root / "practices" / "bad.md").write_bytes(b"# Bad\n\xff\xfe\n")
+    (root / "sources" / "2026-01-02-bad.md").write_bytes(b"# Bad\n\xff\n")
+    kb = KnowledgeBase(root)
+    with caplog.at_level(logging.WARNING, logger="jdad.kb"):
+        assert [t["topic"] for t in kb.list_topics()] == ["good"]
+        assert "Paginate" in kb.get_checklist([])
+        assert kb.search_practices("Paginate")
+        assert [s["id"] for s in kb.list_sources()] == ["2026-01-01-real"]
+    assert "skipping practice bad.md" in caplog.text
+    assert "skipping source 2026-01-02-bad.md" in caplog.text
+    with pytest.raises(UnicodeDecodeError):
+        kb.get_practice("bad")  # asking for it directly still fails loudly
