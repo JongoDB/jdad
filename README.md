@@ -23,6 +23,7 @@ deploy/                    Docker Compose, update-docker.sh, and a leftover syst
 .mcp.json                  plugin MCP config (points at the hosted URL)
 commands/jdad.md           /jdad slash command
 skills/jdad-performance/   one skill per practices topic file
+skills/jdad-workflow/
 tests/
 ```
 
@@ -97,7 +98,7 @@ The plugin's `.mcp.json` already points at `https://jdad-mcp.jondevs.com/mcp` an
 Authorization: Bearer ${JDAD_TOKEN}
 ```
 
-Claude Code expands `${JDAD_TOKEN}` from the environment when it starts the plugin (official plugin MCP config: `url` and `headers` support `${VAR}` and `${VAR:-default}`). Export `JDAD_TOKEN` in the environment of the Claude Code process. If the variable is unset, Claude Code warns and may send the unexpanded `${JDAD_TOKEN}` text, which the server rejects with 401. It also ships the `/jdad` slash command (`plan`, `review`, `perf`, `add <url>`) and a `jdad-performance` skill.
+Claude Code expands `${JDAD_TOKEN}` from the environment when it starts the plugin (official plugin MCP config: `url` and `headers` support `${VAR}` and `${VAR:-default}`). Export `JDAD_TOKEN` in the environment of the Claude Code process. If the variable is unset, Claude Code warns and may send the unexpanded `${JDAD_TOKEN}` text, which the server rejects with 401. It also ships the `/jdad` slash command (`plan`, `review`, `perf`, `add <url>`) and the `jdad-performance` and `jdad-workflow` skills.
 
 This repo is private, so the host that adds the marketplace needs git auth for `github.com/JongoDB/jdad`.
 

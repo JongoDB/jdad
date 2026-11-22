@@ -137,8 +137,8 @@ def test_repo_sources_follow_the_schema() -> None:
 
 def test_list_sources_returns_the_new_fields() -> None:
     sources = KnowledgeBase(REPO_ROOT).list_sources()
-    assert [s["id"] for s in sources] == ["2026-11-22-breakingbreach-app-performance"]
-    entry = sources[0]
+    assert "2026-11-22-breakingbreach-app-performance" in [s["id"] for s in sources]
+    entry = next(s for s in sources if s["id"] == "2026-11-22-breakingbreach-app-performance")
     assert entry["cite_as"] == "breakingbreach"
     assert entry["items"] == 31
     assert entry["format"] == "reel"

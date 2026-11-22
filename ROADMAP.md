@@ -86,6 +86,7 @@ Goal: video or article → source → practice, with dedupe, tags and citations,
   - Deliverables: `sources/` records for OpenAI "Harness engineering", Anthropic's long-running harness and harness-design posts, and Claude Code best practices (see `docs/research/`); `practices/agentic-workflow.md` tagged `[process]`; `catalog/skills/jdad-workflow/`.
   - Acceptance: every rule cites one of those sources or is labeled a KB addition; `get_checklist(["process"])` returns them.
   - Depends on: P1.3, P2.3.
+  - Progress (2026-11-22, JON-1348): four `sources/` records, `practices/agentic-workflow.md` (61 rules, every section `[process]`, every rule cites one of the four), `skills/jdad-workflow/` as a hand copy; `tests/test_workflow_kb.py`. Open: `catalog/skills/jdad-workflow/` waits for the catalog stack (P1.4/P1.5) to meet this one.
 - [ ] **P2.5 Citation integrity and source freshness**
   - Deliverables: lint that every `src:` resolves to a source and item; a report of sources older than 12 months whose topic has newer sources.
   - Acceptance: with the date frozen in tests: source A older than 365 days plus a same-topic source B newer than A produces an A→B line in the report; a source with no newer same-topic peer isn't reported; a `src:` to a missing source or item number makes lint exit non-zero and names the citation.
