@@ -158,7 +158,9 @@ _HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])")
 # idea of "code" can differ from a renderer's (escaped backticks, fences
 # with odd info strings): a tag with an attribute, or a real HTML element.
 # Only harmless unknown tags in code (`List<String>`, `<T>`) are exempt.
-_HTML_ATTR_TAG_RE = re.compile(r"<[A-Za-z][A-Za-z0-9-]*\s+[A-Za-z_:][\w:.-]*\s*(=|/?>|\s|$)")
+# Browsers accept "/" between attributes (<x/src=a/onerror=b>), and a tag
+# can continue on the next line, so a tag name at the end of a line counts.
+_HTML_ATTR_TAG_RE = re.compile(r"<[A-Za-z][A-Za-z0-9-]*(?:[\s/]+[A-Za-z_:][\w:.-]*\s*(=|/?>|\s|/|$)|\s*$)")
 _HTML_ELEMENT_RE = re.compile(
     r"</?(a|abbr|audio|b|base|bdo|blink|br|button|canvas|code|del|details|dialog|div|em|embed|"
     r"font|form|frame|frameset|i|iframe|img|input|ins|label|link|mark|marquee|math|meta|"
@@ -173,7 +175,17 @@ _BARE_DOMAIN_RE = re.compile(
     r"(?<![\w@./:%-])(?!www\.)((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,24}))(/\S*)?",
     re.IGNORECASE,
 )
-_RULE_ID_TAIL_RE = re.compile(r"\s*\{#[a-z0-9][a-z0-9.-]*\}\s*$")
+_RULE_ID_TAIL_RE = re.compile(r"\s*\{#([a-z0-9][a-z0-9.-]*)\}\s*$")
+# A rule ID must not end like a hostname (perf.evil.com), since the ID is
+# exempt from the bare-domain check on its own rule line.
+_TLD_LIKE = frozenset(
+    {
+        "com", "net", "org", "io", "dev", "app", "co", "ai", "xyz", "info", "biz", "me", "ly", "gg",
+        "cc", "tk", "ru", "cn", "top", "site", "online", "link", "click", "live", "store", "tech",
+        "cloud", "page", "run", "pro", "us", "uk", "de", "fr", "eu", "ca", "au", "tv", "ws", "su",
+        "pw", "icu", "shop", "work", "zone", "agency", "sh", "to", "is", "so", "in", "it", "at",
+    }
+)
 _FILE_EXTENSIONS = frozenset(
     {
         "md", "markdown", "txt", "rst", "toml", "yaml", "yml", "json", "jsonc", "lock", "cfg", "ini",
@@ -199,6 +211,11 @@ _CONFUSABLES = {
     0x03A5: "Y", 0x03A7: "X",
     # Latin lookalikes NFKD leaves alone (dotless i, script g, alpha, sharp s)
     0x0131: "i", 0x0237: "j", 0x0261: "g", 0x0251: "a", 0x00DF: "ss",
+    # Latin small capitals and IPA letters that read as capitals
+    0x1D00: "a", 0x0299: "b", 0x1D04: "c", 0x1D05: "d", 0x1D07: "e", 0xA730: "f", 0x0262: "g",
+    0x029C: "h", 0x026A: "i", 0x1D0A: "j", 0x1D0B: "k", 0x029F: "l", 0x1D0D: "m", 0x0274: "n",
+    0x1D0F: "o", 0x1D18: "p", 0x0280: "r", 0xA731: "s", 0x1D1B: "t", 0x1D1C: "u", 0x1D20: "v",
+    0x1D21: "w", 0x028F: "y", 0x1D22: "z",
     # Armenian
     0x0585: "o", 0x057D: "u", 0x0578: "n", 0x0570: "h", 0x0566: "q", 0x0581: "g", 0x0531: "U",
     # Cherokee capitals
@@ -371,7 +388,13 @@ def _homoglyph_words(line: str, *, ascii_only: bool) -> list[str]:
         # Accented Latin (cafe with an accent) folds to ASCII and is fine; a
         # Latin letter that doesn't fold (dotless i, sharp s) is a lookalike.
         mixed = has_ascii and (non_latin or not _fold_accents(word).isascii())
-        if ascii_only or mixed or (not has_ascii and folded.isascii() and folded.isalpha()):
+        # All non-ASCII: a lookalike if it folds to ASCII letters, or if it is
+        # all Latin-script letters that accents alone can't fold (small caps).
+        all_latin = all(unicodedata.name(ch, "").startswith("LATIN ") for ch in word)
+        lookalike = not has_ascii and (
+            (folded.isascii() and folded.isalpha()) or (all_latin and not _fold_accents(word).isascii())
+        )
+        if ascii_only or mixed or lookalike:
             words.append(word)
     return words
 
@@ -440,6 +463,17 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
     # and U+2029, which would hide exactly the characters checked below.
     lines = [line.removesuffix("\r") for line in text.split("\n")]
     findings: list[Finding] = []
+    # Lines on which a parsed rule's own {#id} may be stripped before the
+    # bare-domain check: only lines inside that rule, only that exact ID.
+    rule_id_lines: dict[int, str] = {}
+    if top == "practices" and rel.count("/") == 1:
+        try:
+            for rule in parse_practice(path, root=root).rules:
+                if rule.id:
+                    for number in range(rule.line, max(rule.last_line, rule.line) + 1):
+                        rule_id_lines[number] = rule.id
+        except (OSError, UnicodeDecodeError, ValueError):
+            pass
     in_fence = False
     for number, line in enumerate(lines, start=1):
         fence = bool(_FENCE_RE.match(line))
@@ -471,7 +505,11 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
                     findings.append(Finding(rel, number, "url", problem, line))
             # A rule's trailing {#perf.db.n-plus-one} ID (docs/kb-schema.md) is
             # dotted like a domain; the rule-id check validates it instead.
-            for problem in _bare_domain_problems(_RULE_ID_TAIL_RE.sub("", line), config.url_allow):
+            checked = line
+            tail = _RULE_ID_TAIL_RE.search(line)
+            if tail and rule_id_lines.get(number) == tail.group(1):
+                checked = line[: tail.start()]
+            for problem in _bare_domain_problems(checked, config.url_allow):
                 findings.append(Finding(rel, number, "url", problem, line))
     if top in INSTRUCTION_DIRS:
         findings.extend(_injection_findings(rel, lines))
@@ -671,6 +709,10 @@ def _structure_findings(root: Path, sources: dict[str, tuple[str, int]] | None =
                         Finding(rel, rule.line, "rule-id", f"malformed rule ID '{rule.id}' (lowercase segments joined by dots)", text)
                     )
                     continue
+                if rule.id.rsplit(".", 1)[-1] in _TLD_LIKE:
+                    findings.append(
+                        Finding(rel, rule.line, "rule-id", f"rule ID '{rule.id}' ends like a hostname; rename its last segment", text)
+                    )
                 if rule.id in seen_ids:
                     findings.append(Finding(rel, rule.line, "rule-id", f"duplicate rule ID '{rule.id}' (also at {seen_ids[rule.id]})", text))
                 else:
