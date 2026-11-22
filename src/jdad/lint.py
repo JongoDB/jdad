@@ -144,7 +144,9 @@ _HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])")
 # idea of "code" can differ from a renderer's (escaped backticks, fences
 # with odd info strings): a tag with an attribute, or a real HTML element.
 # Only harmless unknown tags in code (`List<String>`, `<T>`) are exempt.
-_HTML_ATTR_TAG_RE = re.compile(r"<[A-Za-z][A-Za-z0-9-]*\s+[A-Za-z_:][\w:.-]*\s*(=|/?>|\s|$)")
+# Browsers accept "/" between attributes (<x/src=a/onerror=b>), and a tag
+# can continue on the next line, so a tag name at the end of a line counts.
+_HTML_ATTR_TAG_RE = re.compile(r"<[A-Za-z][A-Za-z0-9-]*(?:[\s/]+[A-Za-z_:][\w:.-]*\s*(=|/?>|\s|/|$)|\s*$)")
 _HTML_ELEMENT_RE = re.compile(
     r"</?(a|abbr|audio|b|base|bdo|blink|br|button|canvas|code|del|details|dialog|div|em|embed|"
     r"font|form|frame|frameset|i|iframe|img|input|ins|label|link|mark|marquee|math|meta|"
@@ -185,6 +187,11 @@ _CONFUSABLES = {
     0x03A5: "Y", 0x03A7: "X",
     # Latin lookalikes NFKD leaves alone (dotless i, script g, alpha, sharp s)
     0x0131: "i", 0x0237: "j", 0x0261: "g", 0x0251: "a", 0x00DF: "ss",
+    # Latin small capitals and IPA letters that read as capitals
+    0x1D00: "a", 0x0299: "b", 0x1D04: "c", 0x1D05: "d", 0x1D07: "e", 0xA730: "f", 0x0262: "g",
+    0x029C: "h", 0x026A: "i", 0x1D0A: "j", 0x1D0B: "k", 0x029F: "l", 0x1D0D: "m", 0x0274: "n",
+    0x1D0F: "o", 0x1D18: "p", 0x0280: "r", 0xA731: "s", 0x1D1B: "t", 0x1D1C: "u", 0x1D20: "v",
+    0x1D21: "w", 0x028F: "y", 0x1D22: "z",
     # Armenian
     0x0585: "o", 0x057D: "u", 0x0578: "n", 0x0570: "h", 0x0566: "q", 0x0581: "g", 0x0531: "U",
     # Cherokee capitals
@@ -357,7 +364,13 @@ def _homoglyph_words(line: str, *, ascii_only: bool) -> list[str]:
         # Accented Latin (cafe with an accent) folds to ASCII and is fine; a
         # Latin letter that doesn't fold (dotless i, sharp s) is a lookalike.
         mixed = has_ascii and (non_latin or not _fold_accents(word).isascii())
-        if ascii_only or mixed or (not has_ascii and folded.isascii() and folded.isalpha()):
+        # All non-ASCII: a lookalike if it folds to ASCII letters, or if it is
+        # all Latin-script letters that accents alone can't fold (small caps).
+        all_latin = all(unicodedata.name(ch, "").startswith("LATIN ") for ch in word)
+        lookalike = not has_ascii and (
+            (folded.isascii() and folded.isalpha()) or (all_latin and not _fold_accents(word).isascii())
+        )
+        if ascii_only or mixed or lookalike:
             words.append(word)
     return words
 
