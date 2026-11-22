@@ -13,7 +13,8 @@ FIX="$ROOT/tests/fixtures/cloudflare"
 N="jdad-fwdind-$$-$RANDOM"
 C="$N-client"
 BASE="$(sed -n 's/^FROM \(python:3.12-slim@sha256:[0-9a-f]*\).*/\1/p' "$ROOT/Dockerfile" | head -1)"
-trap 'docker rm -f "$N" "$C" >/dev/null 2>&1 || true' EXIT
+# -v: docker:dind declares VOLUME /var/lib/docker; without it each run leaks an anonymous volume.
+trap 'docker rm -f -v "$N" "$C" >/dev/null 2>&1 || true' EXIT
 
 fail() { echo "FAIL $*" >&2; exit 1; }
 ip_of() { docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' "$1"; }
