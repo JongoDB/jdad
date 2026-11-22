@@ -91,3 +91,16 @@ require_root() {
     exit 1
   fi
 }
+
+# True when DIR is the top level of a git work tree. Works for normal
+# clones (.git directory) and for worktrees and submodules (.git file).
+# Optional extra args are a command prefix, e.g. run_as_jdad, so git runs
+# as the checkout's owner (avoids "dubious ownership" as root).
+is_git_checkout() {
+  local dir="$1" top real
+  shift
+  [[ -d "$dir" && -e "$dir/.git" ]] || return 1
+  top="$("$@" git -C "$dir" rev-parse --show-toplevel 2>/dev/null)" || return 1
+  real="$(cd "$dir" && pwd -P)"
+  [[ "$top" == "$real" ]]
+}

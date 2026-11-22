@@ -233,12 +233,19 @@ _LOOPBACK_ORIGINS = (
 )
 
 
+class AllowedHostsError(ValueError):
+    """JDAD_ALLOWED_HOSTS has an entry the server refuses to trust."""
+
+
 def parse_allowed_hosts(raw: str | None = None) -> list[str]:
     """Parse JDAD_ALLOWED_HOSTS: comma-separated public hostnames.
 
     Loopback is not required here; it is always merged in later. A pasted
     URL has its scheme and path stripped. Empty and whitespace-only items
-    are ignored.
+    are ignored. Entries are lowercased, because Host matching is exact and
+    DNS names are case-insensitive. Wildcards (``*``) are rejected: they
+    would not match anything useful, and silently accepting them hides a
+    misconfiguration.
     """
     text = os.environ.get("JDAD_ALLOWED_HOSTS", "") if raw is None else raw
     hosts: list[str] = []
@@ -248,7 +255,12 @@ def parse_allowed_hosts(raw: str | None = None) -> list[str]:
             continue
         if "://" in item:
             item = item.split("://", 1)[1]
-        item = item.split("/", 1)[0].strip()
+        item = item.split("/", 1)[0].strip().lower()
+        if "*" in item:
+            raise AllowedHostsError(
+                f"JDAD_ALLOWED_HOSTS: wildcard entry {part.strip()!r} is not supported; "
+                "list each public hostname"
+            )
         if item and item not in hosts:
             hosts.append(item)
     return hosts
@@ -267,9 +279,10 @@ def _host_allow_entries(hostname: str) -> list[str]:
 
 def _origin_allow_entries(hostname: str) -> list[str]:
     host = hostname.removesuffix(":*")
-    # IPv6 in Host is [::1] or [::1]:port; origins use http://[::1]:*
+    # Public hosts get https origins only; loopback http origins are in
+    # _LOOPBACK_ORIGINS. IPv6 in Host is [::1] or [::1]:port.
     origins: list[str] = []
-    for scheme in ("https", "http"):
+    for scheme in ("https",):
         if host.endswith(":*") or ":" not in host.rstrip("]"):
             origins.append(f"{scheme}://{host}")
             if not host.endswith(":*"):
@@ -370,6 +383,10 @@ def main(argv: list[str] | None = None) -> None:
         import uvicorn
 
         check_http_bind(args.host, allow_no_auth=args.allow_no_auth)
+        try:
+            parse_allowed_hosts()
+        except AllowedHostsError as exc:
+            raise SystemExit(f"jdad-mcp: {exc}") from exc
         cert, key = resolve_ssl_files(args.ssl_certfile, args.ssl_keyfile)
         run_kw: dict[str, object] = {"host": args.host, "port": args.port}
         if cert and key:

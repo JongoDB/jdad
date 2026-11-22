@@ -26,3 +26,22 @@ def test_marketplace_and_plugin_manifests() -> None:
     assert "Daisy" in command
     skill = (REPO_ROOT / "skills/jdad-performance/SKILL.md").read_text()
     assert "Skeleton" in skill or "N+1" in skill or "performance" in skill.lower()
+
+
+def test_marketplace_git_sources_are_pinned_by_sha() -> None:
+    """Any non-relative plugin source must pin a 40-hex commit (ROADMAP P7.2 prerequisite)."""
+    import json
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    marketplace = json.loads((root / ".claude-plugin/marketplace.json").read_text())
+    unpinned = []
+    for entry in marketplace.get("plugins") or []:
+        source = entry.get("source")
+        if isinstance(source, str) and source.startswith("./"):
+            continue  # this repo itself; main is the trust boundary
+        sha = source.get("sha") if isinstance(source, dict) else None
+        if not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha)):
+            unpinned.append(entry.get("name"))
+    assert not unpinned, f"plugin sources without a pinned sha: {unpinned}"
