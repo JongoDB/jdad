@@ -53,13 +53,18 @@ uv run jdad-mcp
 # stdio, from git (needs git auth for this private repo)
 uvx --from git+https://github.com/JongoDB/jdad jdad-mcp
 
-# streamable HTTP, as run on the LXC
+# streamable HTTP, defaults to 127.0.0.1:8765
+jdad-mcp --http
+
+# on the LXC, listen on all interfaces (requires JDAD_TOKEN, or --allow-no-auth)
 jdad-mcp --http --host 0.0.0.0 --port 8765
 ```
 
 `KB_ROOT` overrides the content directory. It must point at a directory that contains `practices/` and `sources/`. If unset, the server uses a checkout of this repo when it can find one, otherwise the files bundled in the package.
 
-`JDAD_TOKEN` is optional. When set, every HTTP path except `/healthz` requires `Authorization: Bearer <token>`. Stdio does not use the token. Store the value in `/etc/jdad.env` (mode 0600) on the host; never commit it.
+`JDAD_TOKEN` is optional on loopback. When set, every HTTP path except `/healthz` requires `Authorization: Bearer <token>`. Stdio does not use the token. Store the value in `/etc/jdad.env` (mode 0600) on the host; never commit it.
+
+The default HTTP bind is `127.0.0.1`. Binding to a non-loopback address (`0.0.0.0`, a public IP, or a hostname other than `localhost`) without `JDAD_TOKEN` refuses to start unless you pass `--allow-no-auth`, which logs a loud warning.
 
 ### Tools
 
@@ -75,7 +80,7 @@ jdad-mcp --http --host 0.0.0.0 --port 8765
 
 Tags for `search_practices` and `get_checklist`: `frontend`, `backend`, `db`, `infra`, `observability`, `testing`. An empty `tags` list on `get_checklist` returns every rule.
 
-Practice files are also MCP resources at `kb://practices/<name>` (for example `kb://practices/performance`). The `apply-kb` prompt tells an agent to pull the relevant checklist before planning and to cite the rules in its PR. `/healthz` returns `{"status": "ok", "kb_version": ...}` and stays unauthenticated.
+Practice files are also MCP resources at `kb://practices/<name>` (for example `kb://practices/performance`). The `apply-kb` prompt tells an agent to pull the relevant checklist before planning and to cite the rules in its PR. `/healthz` returns `{"status": "ok"}` and stays unauthenticated. The git SHA lives only on the auth-gated `kb_version` tool.
 
 ## Point a coding agent at the hosted server
 
@@ -88,7 +93,7 @@ Replace `http://jdad.local:8765/mcp` if the LXC ends up on a different name. If 
 /plugin install jdad@jdad
 ```
 
-The plugin's `.mcp.json` already points at `http://jdad.local:8765/mcp`. It also ships the `/jdad` slash command (`plan`, `review`, `perf`, `add <url>`) and a `jdad-performance` skill.
+The plugin's `.mcp.json` already points at `http://jdad.local:8765/mcp` and sends `Authorization: Bearer ${JDAD_TOKEN}`. Claude Code expands `${JDAD_TOKEN}` from the environment when it starts the plugin (official plugin MCP config: `url` and `headers` support `${VAR}` and `${VAR:-default}`). Export `JDAD_TOKEN` in the environment of the Claude Code process. If the variable is unset, Claude Code warns and may send the unexpanded `${JDAD_TOKEN}` text, which the server will reject with 401. It also ships the `/jdad` slash command (`plan`, `review`, `perf`, `add <url>`) and a `jdad-performance` skill.
 
 This repo is private, so the host that adds the marketplace needs git auth for `github.com/JongoDB/jdad`.
 
@@ -125,6 +130,8 @@ Stdio still works if you would rather run the server locally, including `uvx --f
 
 The unit assumes a checkout at `/opt/jdad` and a `jdad` user. Adjust paths if needed.
 
+The unit binds to `0.0.0.0:8765` as user `jdad` and enables `NoNewPrivileges`, `ProtectSystem=strict` (with `ReadWritePaths` for the checkout), `PrivateTmp`, and `ProtectHome`. Set `JDAD_TOKEN` in `/etc/jdad.env` before starting; without it the process will refuse that bind.
+
 ```bash
 sudo git clone git@github.com:JongoDB/jdad.git /opt/jdad
 cd /opt/jdad
@@ -132,14 +139,14 @@ sudo uv sync --frozen --no-dev
 sudo install -d -m 0755 /etc
 sudo cp deploy/jdad.env.example /etc/jdad.env
 sudo chmod 0600 /etc/jdad.env
-# edit /etc/jdad.env and set JDAD_TOKEN if you want bearer auth
+# edit /etc/jdad.env and set JDAD_TOKEN (required for the 0.0.0.0 unit)
 sudo cp deploy/jdad.service /etc/systemd/system/jdad.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now jdad.service
 curl -fsS http://127.0.0.1:8765/healthz
 ```
 
-`deploy/update.sh` is idempotent: it `git pull --ff-only`, runs `uv sync --frozen --no-dev` and restarts only when HEAD changes, and starts the service if it is down. Run it from cron or by hand as root (or a user that can `systemctl` this unit):
+`deploy/update.sh` is idempotent: it requires `uv` on `PATH` (and exits if it is missing), then `git pull --ff-only`, runs `uv sync --frozen --no-dev` and restarts only when HEAD changes, and starts the service if it is down. Run it from cron or by hand as root (or a user that can `systemctl` this unit):
 
 ```bash
 sudo JDAD_ROOT=/opt/jdad deploy/update.sh
@@ -149,5 +156,7 @@ sudo JDAD_ROOT=/opt/jdad deploy/update.sh
 
 ```bash
 uv sync
-uv run pytest
+./verify
 ```
+
+`./verify` runs ruff, pytest, `uv build`, and `claude plugin validate` when the Claude CLI is on `PATH` (it skips that last step with a note when it isn't). The same script is the GitHub Actions check on pull requests and on pushes to `main`.

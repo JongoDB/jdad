@@ -15,7 +15,14 @@ ExecStart=/opt/jdad/.venv/bin/jdad-mcp --http --host 0.0.0.0 --port 8765
 Restart=on-failure
 RestartSec=5
 
-# The process should not need a TTY; keep stdio for journald.
+# Dedicated unprivileged user, plus a tight sandbox. The service needs
+# JDAD_TOKEN in /etc/jdad.env; without it this bind is refused at start.
+NoNewPrivileges=true
+ProtectSystem=strict
+ReadWritePaths=/opt/jdad
+PrivateTmp=true
+ProtectHome=true
+
 StandardOutput=journal
 StandardError=journal
 

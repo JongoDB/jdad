@@ -16,8 +16,9 @@ def test_marketplace_and_plugin_manifests() -> None:
     assert plugin["name"] == "jdad"
     assert plugin["version"]
     mcp = json.loads((REPO_ROOT / ".mcp.json").read_text())
-    url = mcp["mcpServers"]["jdad"]["url"]
-    assert url == "http://jdad.local:8765/mcp"
+    server = mcp["mcpServers"]["jdad"]
+    assert server["url"] == "http://jdad.local:8765/mcp"
+    assert server["headers"]["Authorization"] == "Bearer ${JDAD_TOKEN}"
     command = (REPO_ROOT / "commands/jdad.md").read_text()
     assert "/jdad plan" in command or "plan" in command
     assert "Daisy" in command

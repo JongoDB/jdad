@@ -2,7 +2,7 @@
 
 This repo is JDAD (Jon-does-agentic-dev), Jon's agentic coding knowledge base. The MCP server in `src/jdad/` is how other coding agents (Claude Code, Codex, cursor-agent) read it. It is read-only at runtime: never add a tool, resource, or code path that writes to `practices/` or `sources/`.
 
-The package and CLI are named `jdad`. The entry point is `jdad-mcp`. It serves stdio by default and streamable HTTP with `jdad-mcp --http --host 0.0.0.0 --port 8765`.
+The package and CLI are named `jdad`. The entry point is `jdad-mcp`. It serves stdio by default and streamable HTTP with `jdad-mcp --http` (default bind `127.0.0.1:8765`). A non-loopback bind without `JDAD_TOKEN` is refused unless `--allow-no-auth` is passed.
 
 ## Adding a knowledge-base entry
 
@@ -33,8 +33,8 @@ When Jon (or anyone) sends a video, article, or thread to mine:
 - Stack: official `mcp` Python SDK v2 (`MCPServer`, the successor to `FastMCP`), stdio entry point `jdad-mcp`, HTTP via `--http`.
 - Keep it dependency-light and offline. No network calls from the server.
 - Practice files must stay available as `kb://practices/<name>` resources.
-- Keep the `apply-kb` prompt, `kb_version` (git SHA plus newest entry date), `/healthz`, and optional bearer auth from `JDAD_TOKEN`.
-- Tests in `tests/` start the server in-process (`mcp.Client(mcp)`), over stdio (`uv run jdad-mcp`), and over HTTP (`create_http_app()`). Update them when you add a tool.
+- Keep the `apply-kb` prompt, `kb_version` (git SHA plus newest entry date; git is invoked with `--no-optional-locks`), `/healthz` (`{"status": "ok"}` only), and optional bearer auth from `JDAD_TOKEN`. The plugin `.mcp.json` must send `Authorization: Bearer ${JDAD_TOKEN}` (Claude Code expands `${JDAD_TOKEN}` from the environment).
+- Tests in `tests/` start the server in-process (`mcp.Client(mcp)`), over stdio (`uv run jdad-mcp`), and over HTTP (`create_http_app()`). Update them when you add a tool. Run `./verify` before you push.
 
 ## What not to do
 

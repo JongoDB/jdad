@@ -68,3 +68,22 @@ def test_version_includes_sha_and_newest_entry() -> None:
     assert info["newest_entry"] == "2026-11-22"
     assert "2026-11-22" in info["display"]
     assert info["sha"] in info["display"]
+
+
+def test_git_reads_use_no_optional_locks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from jdad import kb as kbmod
+
+    seen: list[list[str]] = []
+
+    def fake_run(argv, **kwargs):
+        seen.append(list(argv))
+        class Result:
+            stdout = "deadbeef\n"
+        return Result()
+
+    monkeypatch.setattr(kbmod.subprocess, "run", fake_run)
+    sha, _dirty = KnowledgeBase(REPO_ROOT)._git_sha()
+    assert sha == "deadbeef"
+    assert seen
+    for argv in seen:
+        assert argv[:2] == ["git", "--no-optional-locks"]

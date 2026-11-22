@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Local and CI proof for this repo: lint, tests, build, and plugin validate when present.
+set -euo pipefail
+
+cd "$(dirname "$0")"
+
+echo "==> ruff"
+uv run ruff check src tests
+
+echo "==> pytest"
+uv run pytest
+
+echo "==> uv build"
+uv build
+
+if command -v claude >/dev/null 2>&1; then
+  echo "==> claude plugin validate"
+  claude plugin validate .
+else
+  echo "==> claude plugin validate: skipped (claude CLI not found)"
+fi
+
+echo "verify: ok"

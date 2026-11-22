@@ -13,7 +13,7 @@ from mcp import Client, StdioServerParameters
 from mcp.client.streamable_http import streamable_http_client
 from mcp.types import TextContent, TextResourceContents
 
-from jdad.server import create_http_app, mcp
+from jdad.server import create_http_app
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 EXPECTED_TOOLS = {
@@ -229,12 +229,10 @@ def http_server(kb_root: Path) -> _HttpServer:
         server.stop()
 
 
-def test_healthz_is_open_and_reports_version(http_server: _HttpServer) -> None:
+def test_healthz_is_open_and_returns_only_ok(http_server: _HttpServer) -> None:
     response = httpx2.get(f"{http_server.base}/healthz", timeout=5)
     assert response.status_code == 200
-    body = response.json()
-    assert body["status"] == "ok"
-    assert body["kb_version"]["newest_entry"] == "2026-11-22"
+    assert response.json() == {"status": "ok"}
 
 
 @pytest.mark.anyio
@@ -304,13 +302,38 @@ async def test_http_client_with_bearer_token(monkeypatch: pytest.MonkeyPatch, kb
             headers={"Authorization": f"Bearer {token}"},
             timeout=10,
         )
-        async with http:
-            async with Client(
-                streamable_http_client(f"{server.base}/mcp", http_client=http)
-            ) as mcp_client:
-                practice = tool_payload(
-                    await mcp_client.call_tool("get_practice", {"topic": "performance"})
-                )
-                assert "Skeleton loaders" in practice
+        async with (
+            http,
+            Client(streamable_http_client(f"{server.base}/mcp", http_client=http)) as mcp_client,
+        ):
+            practice = tool_payload(
+                await mcp_client.call_tool("get_practice", {"topic": "performance"})
+            )
+            assert "Skeleton loaders" in practice
     finally:
         server.stop()
+
+
+
+def test_default_http_bind_is_loopback() -> None:
+    from jdad.server import parse_args
+
+    args = parse_args(["--http"])
+    assert args.host == "127.0.0.1"
+    assert args.port == 8765
+    assert args.allow_no_auth is False
+
+
+def test_refuses_non_loopback_without_token(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    from jdad.server import NO_AUTH_BIND_WARNING, InsecureBindError, check_http_bind
+
+    monkeypatch.delenv("JDAD_TOKEN", raising=False)
+    with pytest.raises(InsecureBindError, match="refusing to bind 0.0.0.0"):
+        check_http_bind("0.0.0.0", allow_no_auth=False)
+
+    check_http_bind("127.0.0.1", allow_no_auth=False)
+    check_http_bind("0.0.0.0", allow_no_auth=False, token="not-the-real-token")
+
+    with caplog.at_level("WARNING"):
+        check_http_bind("0.0.0.0", allow_no_auth=True)
+    assert NO_AUTH_BIND_WARNING in caplog.text

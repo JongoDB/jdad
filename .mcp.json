@@ -2,7 +2,10 @@
   "mcpServers": {
     "jdad": {
       "type": "http",
-      "url": "http://jdad.local:8765/mcp"
+      "url": "http://jdad.local:8765/mcp",
+      "headers": {
+        "Authorization": "Bearer ${JDAD_TOKEN}"
+      }
     }
   }
 }

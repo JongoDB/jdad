@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hmac
+import logging
 import os
 from typing import Any
 
@@ -13,6 +14,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 from jdad.kb import KnowledgeBase
+
+logger = logging.getLogger("jdad")
 
 READ_ONLY = ToolAnnotations(
     read_only_hint=True,
@@ -111,7 +114,7 @@ Rule zero: when changing performance, measure first. Profile or trace, fix the t
 @mcp.custom_route("/healthz", methods=["GET"])
 async def healthz(_request: Request) -> Response:
     """Liveness probe. Unauthenticated even when JDAD_TOKEN is set."""
-    return JSONResponse({"status": "ok", "kb_version": _kb().version()})
+    return JSONResponse({"status": "ok"})
 
 
 def _configured_token() -> str:
@@ -169,6 +172,37 @@ class BearerAuthMiddleware:
         await self.app(scope, receive, send)
 
 
+
+def is_loopback(host: str) -> bool:
+    return host.strip().lower() in {"127.0.0.1", "::1", "localhost"}
+
+
+NO_AUTH_BIND_WARNING = (
+    "jdad-mcp: binding to a non-loopback address without JDAD_TOKEN; "
+    "the MCP endpoint is unauthenticated. Set JDAD_TOKEN or bind to 127.0.0.1."
+)
+
+
+class InsecureBindError(SystemExit):
+    """Raised when HTTP would listen off-loopback with no token and no override."""
+
+
+def check_http_bind(host: str, *, allow_no_auth: bool, token: str | None = None) -> None:
+    """Refuse a non-loopback bind without a token unless --allow-no-auth is set."""
+    if is_loopback(host):
+        return
+    expected = (token if token is not None else _configured_token()).strip()
+    if expected:
+        return
+    if allow_no_auth:
+        logger.warning(NO_AUTH_BIND_WARNING)
+        return
+    raise InsecureBindError(
+        "jdad-mcp: refusing to bind "
+        f"{host} without JDAD_TOKEN. Set JDAD_TOKEN or pass --allow-no-auth (insecure)."
+    )
+
+
 def create_http_app():
     """Starlette app for streamable HTTP, with optional bearer auth and /healthz."""
     app = mcp.streamable_http_app()
@@ -188,14 +222,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--host",
-        default="0.0.0.0",
-        help="HTTP bind host (default: 0.0.0.0).",
+        default="127.0.0.1",
+        help="HTTP bind host (default: 127.0.0.1).",
     )
     parser.add_argument(
         "--port",
         type=int,
         default=8765,
         help="HTTP port (default: 8765).",
+    )
+    parser.add_argument(
+        "--allow-no-auth",
+        action="store_true",
+        help="Allow a non-loopback HTTP bind when JDAD_TOKEN is unset (logs a warning).",
     )
     return parser.parse_args(argv)
 
@@ -205,6 +244,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.http:
         import uvicorn
 
+        check_http_bind(args.host, allow_no_auth=args.allow_no_auth)
         uvicorn.run(create_http_app(), host=args.host, port=args.port)
     else:
         mcp.run()

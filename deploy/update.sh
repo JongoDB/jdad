@@ -7,6 +7,11 @@ set -euo pipefail
 ROOT="${JDAD_ROOT:-/opt/jdad}"
 SERVICE="${JDAD_SERVICE:-jdad.service}"
 
+if ! command -v uv >/dev/null 2>&1; then
+  echo "jdad: uv is not on PATH; install uv before running update.sh" >&2
+  exit 1
+fi
+
 if [[ ! -d "$ROOT/.git" ]]; then
   echo "jdad: no git checkout at $ROOT" >&2
   exit 1
@@ -19,9 +24,7 @@ git pull --ff-only
 after="$(git rev-parse HEAD)"
 
 sync_deps() {
-  if command -v uv >/dev/null 2>&1; then
-    uv sync --frozen --no-dev
-  fi
+  uv sync --frozen --no-dev
 }
 
 service_active() {

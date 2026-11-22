@@ -46,6 +46,19 @@ def resolve_kb_root(explicit: str | Path | None = None) -> Path:
     )
 
 
+
+def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
+    """Run git without optional locks so reads cannot race a checkout or refresh the index."""
+    return subprocess.run(
+        ["git", "--no-optional-locks", *args],
+        cwd=cwd,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+
+
 def _is_kb_root(path: Path) -> bool:
     return (path / PRACTICES_DIR).is_dir() and (path / SOURCES_DIR).is_dir()
 
@@ -357,24 +370,8 @@ class KnowledgeBase:
         if git_root is None:
             return "unknown", False
         try:
-            sha = subprocess.run(
-                ["git", "rev-parse", "HEAD"],
-                cwd=git_root,
-                check=True,
-                capture_output=True,
-                text=True,
-                timeout=5,
-            ).stdout.strip()
-            dirty = bool(
-                subprocess.run(
-                    ["git", "status", "--porcelain"],
-                    cwd=git_root,
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=5,
-                ).stdout.strip()
-            )
+            sha = _git(["rev-parse", "HEAD"], git_root).stdout.strip()
+            dirty = bool(_git(["status", "--porcelain"], git_root).stdout.strip())
             return sha or "unknown", dirty
         except (OSError, subprocess.SubprocessError):
             return "unknown", False
