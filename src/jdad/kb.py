@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
+import errno
+import logging
 import os
 import re
+import stat
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+logger = logging.getLogger("jdad.kb")
+
+# Largest practice or source file the server will read. The KB's files are a
+# few KiB; the cap keeps one oversized file from being served whole to every
+# client (Checker on PR #8). `jdad lint-kb` fails on bigger files too.
+MAX_KB_FILE_BYTES = 1024 * 1024
 
 PRACTICES_DIR = "practices"
 SOURCES_DIR = "sources"
@@ -166,8 +176,68 @@ class PracticeDoc:
         return [section.heading for section in self.sections]
 
 
+def read_kb_file(path: Path) -> str:
+    """Read one KB file as UTF-8, refusing anything but a small regular file.
+
+    The final path component is opened with O_NOFOLLOW (a symlink fails
+    instead of being followed) and O_NONBLOCK (a FIFO can't hang the
+    server); the type and size are then checked on the open descriptor, so
+    a file swapped after listing is still caught.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        fd = os.open(path, flags)
+    except OSError as exc:
+        if exc.errno in (errno.ELOOP, errno.EMLINK):
+            raise FileNotFoundError(f"{path.name} is a symlink; KB files must be regular files") from None
+        raise
+    with os.fdopen(fd, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise FileNotFoundError(f"{path.name} is not a regular file")
+        data = handle.read(MAX_KB_FILE_BYTES + 1)
+    if len(data) > MAX_KB_FILE_BYTES:
+        raise FileNotFoundError(f"{path.name} is larger than {MAX_KB_FILE_BYTES} bytes")
+    return data.decode("utf-8")
+
+
+def kb_markdown_files(root: Path, directory: Path) -> list[Path]:
+    """The ``*.md`` files in ``directory`` that the server may serve.
+
+    Skips (with a warning) a directory that is a symlink or resolves outside
+    ``root``, and files that are symlinks, not regular files, or over
+    MAX_KB_FILE_BYTES. Every tool and resource lists files through here.
+    """
+    if directory.is_symlink():
+        logger.warning("ignoring %s: the directory is a symlink", directory.name)
+        return []
+    if not directory.is_dir():
+        return []
+    real = directory.resolve()
+    if real.parent != root.resolve():
+        logger.warning("ignoring %s: it resolves outside the KB root", directory.name)
+        return []
+    files: list[Path] = []
+    for path in sorted(directory.glob("*.md")):
+        try:
+            info = path.lstat()
+        except OSError:
+            continue
+        if stat.S_ISLNK(info.st_mode):
+            logger.warning("skipping %s/%s: symlink", directory.name, path.name)
+        elif not stat.S_ISREG(info.st_mode):
+            logger.warning("skipping %s/%s: not a regular file", directory.name, path.name)
+        elif info.st_size > MAX_KB_FILE_BYTES:
+            logger.warning("skipping %s/%s: larger than %d bytes", directory.name, path.name, MAX_KB_FILE_BYTES)
+        elif path.resolve().parent != real:
+            logger.warning("skipping %s/%s: resolves outside its directory", directory.name, path.name)
+        else:
+            files.append(path)
+    return files
+
+
 def parse_practice(path: Path, *, root: Path) -> PracticeDoc:
-    text = path.read_text(encoding="utf-8")
+    text = read_kb_file(path)
     title = first_heading(text, 1) or path.stem
     sections: list[Section] = []
     preamble_lines: list[str] = []
@@ -237,10 +307,10 @@ class KnowledgeBase:
         return self.root / SOURCES_DIR
 
     def practice_paths(self) -> list[Path]:
-        return sorted(self.practices_dir.glob("*.md"))
+        return kb_markdown_files(self.root, self.practices_dir)
 
     def source_paths(self) -> list[Path]:
-        return sorted(self.sources_dir.glob("*.md"))
+        return kb_markdown_files(self.root, self.sources_dir)
 
     def practices(self) -> list[PracticeDoc]:
         return [parse_practice(path, root=self.root) for path in self.practice_paths()]
@@ -260,14 +330,12 @@ class KnowledgeBase:
         return topics
 
     def get_practice(self, topic: str) -> str:
-        return self._resolve_file(self.practices_dir, topic, kind="practice").read_text(
-            encoding="utf-8"
-        )
+        return read_kb_file(self._resolve_file(self.practices_dir, topic, kind="practice"))
 
     def list_sources(self) -> list[dict]:
         items = []
         for path in self.source_paths():
-            text = path.read_text(encoding="utf-8")
+            text = read_kb_file(path)
             items.append(
                 {
                     "id": path.stem,
@@ -279,9 +347,7 @@ class KnowledgeBase:
         return items
 
     def get_source(self, source_id: str) -> str:
-        return self._resolve_file(self.sources_dir, source_id, kind="source").read_text(
-            encoding="utf-8"
-        )
+        return read_kb_file(self._resolve_file(self.sources_dir, source_id, kind="source"))
 
     def search_practices(self, query: str, tag: str | None = None) -> list[dict]:
         needle = query.strip().lower()
@@ -402,7 +468,6 @@ class KnowledgeBase:
             return "unknown", False
 
     def _resolve_file(self, directory: Path, needle: str, *, kind: str) -> Path:
-        directory = directory.resolve()
         if not needle or not str(needle).strip():
             raise FileNotFoundError(f"No {kind} id provided")
         raw = str(needle).strip().replace("\\", "/")
@@ -411,19 +476,20 @@ class KnowledgeBase:
         if not stem or stem in {".", ".."}:
             raise FileNotFoundError(f"Invalid {kind} id {needle!r}")
 
-        # Only <stem>.md: the same set of files list_* returns and `jdad lint-kb` checks.
-        resolved = (directory / f"{stem}.md").resolve()
-        if resolved.is_file() and resolved.parent == directory:
-            return resolved
-
-        matches = sorted(
+        # Only files kb_markdown_files allows (no symlinks, nothing outside the
+        # KB, nothing oversized): the same set list_* returns.
+        files = kb_markdown_files(self.root, directory)
+        for path in files:
+            if path.name == f"{stem}.md":
+                return path
+        matches = [
             path
-            for path in directory.glob("*.md")
+            for path in files
             if stem.lower() in path.stem.lower() or path.stem.lower() in stem.lower()
-        )
+        ]
         if len(matches) == 1:
             return matches[0]
-        available = ", ".join(path.stem for path in self._sorted_md(directory)) or "(none)"
+        available = ", ".join(path.stem for path in files) or "(none)"
         if len(matches) > 1:
             names = ", ".join(path.stem for path in matches)
             raise FileNotFoundError(
@@ -433,6 +499,3 @@ class KnowledgeBase:
             f"Unknown {kind} {needle!r}. Available: {available}"
         )
 
-    @staticmethod
-    def _sorted_md(directory: Path) -> list[Path]:
-        return sorted(directory.glob("*.md"))
