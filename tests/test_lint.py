@@ -409,7 +409,7 @@ def test_html_and_homoglyph_checks_cover_sources(tmp_path: Path) -> None:
         "- Edit README.md, uv.lock and install.sh; e.g. Node.js or Next.js. (src: x #2)\n",
         "- Don't ignore the context of a slow query. (src: x #2)\n",
         "- Previous runs: forget nothing, log everything. (src: x #2)\n",
-        "```ts\nconst xs: Map<string, List<T>> = new Map();\n```\n",
+        "```ts\nconst xs: List<T> = await fetchAll<Promise<void>>();\n```\n",
     ],
 )
 def test_new_checks_have_no_false_positive_on(tmp_path: Path, body: str) -> None:
@@ -503,3 +503,40 @@ def test_small_capitals_word_in_a_source_is_a_homoglyph(tmp_path: Path) -> None:
 def test_html_attribute_rule_follows_the_tokenizer(tmp_path: Path, body: str) -> None:
     root = make_kb(tmp_path, {"practices/clean.md": CLEAN_PRACTICE + body})
     assert "html" in [c for c, p, _ in checks(root) if p == "practices/clean.md"], checks(root)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "- `<x_y onclick=go()>` (src: x #2)\n",  # tag names may hold any character but space, / and >
+        "- `<x.y/onerror=a>` (src: x #2)\n",
+        "- Speed. <x_y\n  onerror=a> (src: x #2)\n",
+    ],
+)
+def test_html_tag_names_follow_the_tokenizer(tmp_path: Path, body: str) -> None:
+    root = make_kb(tmp_path, {"practices/clean.md": CLEAN_PRACTICE + body})
+    assert "html" in [c for c, p, _ in checks(root) if p == "practices/clean.md"], checks(root)
+
+
+
+def test_multi_parameter_generics_count_as_html_by_design(tmp_path: Path) -> None:
+    """A browser parses `Map<string, number>` as a tag named "string," with an
+    attribute, and this lint checks code too (its idea of code can differ from
+    a renderer's). A legitimate use needs a pinned [[allow]] exception."""
+    body = "- `Map<string, number>` for lookups. (src: x #2)\n"
+    root = make_kb(tmp_path, {"practices/clean.md": CLEAN_PRACTICE + body})
+    assert ("html", "practices/clean.md", 5) in checks(root)
+
+
+def test_autolinks_are_not_html_but_are_still_url_checked(tmp_path: Path) -> None:
+    body = "- See <https://evil-example.com/x> or <ops@evil-example.com>. (src: x #2)\n"
+    found = checks(make_kb(tmp_path, {"practices/clean.md": CLEAN_PRACTICE + body}))
+    assert ("html", "practices/clean.md", 5) not in found
+    assert ("url", "practices/clean.md", 5) in found
+
+
+
+@pytest.mark.parametrize("link", ["<javascript:alert(1)>", "<file:///etc/passwd>", "<data:text/html,x>"])
+def test_non_http_autolinks_fail(tmp_path: Path, link: str) -> None:
+    body = f"- Read {link} first. (src: x #2)\n"
+    assert ("url", "practices/clean.md", 5) in checks(make_kb(tmp_path, {"practices/clean.md": CLEAN_PRACTICE + body}))
