@@ -162,9 +162,12 @@ _HTML_TAG_RE = re.compile(r"</?[A-Za-z][^\s/>]*(?=[\s/>]|$)")
 # can continue on the next line, so a tag name at the end of a line counts.
 # Shaped like the HTML tokenizer: after the tag name, whitespace or "/"
 # then anything but ">" starts an attribute (whatever its first character).
-# CommonMark autolinks (<https://x>, <a@b.example>) render as links, not
-# HTML; they're removed before the tag checks (the url check still sees them).
-_AUTOLINK_RE = re.compile(r"<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+)>")
+# CommonMark URI autolinks; in practices/ any scheme but http(s) is a url
+# finding. Only <http(s)://...> autolinks are exempt from the tag checks
+# (the url check still sees them): an email-shaped or other-scheme
+# "autolink" can be a tag (<svg/onload=...@x.example>).
+_AUTOLINK_RE = re.compile(r"<[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*>")
+_HTTP_AUTOLINK_RE = re.compile(r"<https?://[^\s<>]*>", re.IGNORECASE)
 # Tag names, like the tokenizer's, run to the first space, "/" or ">".
 _HTML_ATTR_TAG_RE = re.compile(r"<[A-Za-z][^\s/>]*(?:[\s/]+[^\s/>]|[\s/]*$)")
 _HTML_ELEMENT_RE = re.compile(
@@ -498,7 +501,7 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
         if lookalikes:
             what = "non-ASCII letters in a practice" if top == "practices" else "lookalike letters"
             findings.append(Finding(rel, number, "homoglyph", f"{what}: " + ", ".join(ascii(w) for w in lookalikes), line))
-        no_links = _AUTOLINK_RE.sub("", line)
+        no_links = _HTTP_AUTOLINK_RE.sub("", line)
         if top in INSTRUCTION_DIRS and (
             _HTML_ATTR_TAG_RE.search(no_links)
             or _HTML_ELEMENT_RE.search(no_links)
@@ -519,8 +522,8 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
             for problem in _bare_domain_problems(checked, config.url_allow):
                 findings.append(Finding(rel, number, "url", problem, line))
             for link in _AUTOLINK_RE.finditer(line):
-                scheme = link.group(0)[1:].split(":", 1)[0].lower() if ":" in link.group(0) else ""
-                if scheme and scheme not in ("http", "https"):
+                scheme = link.group(0)[1:].split(":", 1)[0].lower()
+                if scheme not in ("http", "https"):
                     findings.append(Finding(rel, number, "url", f"autolink with scheme '{scheme}:' (only http and https)", line))
     if top in INSTRUCTION_DIRS:
         findings.extend(_injection_findings(rel, lines))
