@@ -11,9 +11,11 @@ content that tries to steer an agent rather than inform it:
   Greek lookalikes mapped to Latin), per line and per paragraph, so a
   phrase split across lines or spelled with homoglyphs is still caught.
 - ``url``: a URL in practices/ whose host isn't in ``url_allow``, including
-  a bare domain with no scheme or ``www`` (``evil.example.com/x``).
-- ``html``: a raw HTML tag outside code (``<img onerror=...>``, ``<span
-  hidden>``). practices/ and sources/.
+  a bare domain with no scheme or ``www`` (``evil.example.com/x``); only a
+  file name with a common extension and no path is exempt.
+- ``html``: a raw HTML tag (``<img onerror=...>``, ``<span hidden>``). A tag
+  with attributes or a real HTML element counts even inside code; only
+  unknown bare tags in code (``<T>``) are exempt. practices/ and sources/.
 - ``shell``: a shell command in practices/ (code spans and blocks with
   risky commands, ``$ `` prompts, pipe-to-shell anywhere) not in
   ``shell_allow``.
@@ -21,7 +23,9 @@ content that tries to steer an agent rather than inform it:
   characters, private-use and stray control characters.
 - ``comment``: HTML comments and Markdown link-reference comments, which
   render as nothing but are read by agents.
-- ``homoglyph``: a word that mixes Latin with Cyrillic or Greek letters.
+- ``homoglyph``: a word mixing ASCII letters with a non-Latin script, or a
+  word of non-ASCII letters that folds to ASCII; in practices/, any
+  non-ASCII letter.
 - ``symlink``: a symlink anywhere in the KB trees.
 - ``encoding``: a file that isn't valid UTF-8.
 - ``file-type``: a file in any KB tree that isn't named ``*.md`` (lowercase).
@@ -126,17 +130,36 @@ _HTML_COMMENT_RE = re.compile(r"<!--")
 # A tag name right after "<" (browsers treat "< b" as text). "<https://x>"
 # autolinks don't match: the name must be followed by space, "/" or ">".
 _HTML_TAG_RE = re.compile(r"</?[A-Za-z][A-Za-z0-9-]*(?=[\s/>])")
-# Bare domains (no scheme, no www.) in practices/. Strong TLDs always count;
-# TLDs that double as file extensions (README.md, install.sh) count only
-# with a path after them (get.sh/start).
+# Flagged anywhere, inside code spans and fences too, because this lint's
+# idea of "code" can differ from a renderer's (escaped backticks, fences
+# with odd info strings): a tag with an attribute, or a real HTML element.
+# Only harmless unknown tags in code (`List<String>`, `<T>`) are exempt.
+_HTML_ATTR_TAG_RE = re.compile(r"<[A-Za-z][A-Za-z0-9-]*\s+[A-Za-z_:][\w:.-]*\s*(=|/?>|\s|$)")
+_HTML_ELEMENT_RE = re.compile(
+    r"</?(a|abbr|audio|b|base|bdo|blink|br|button|canvas|code|del|details|dialog|div|em|embed|"
+    r"font|form|frame|frameset|i|iframe|img|input|ins|label|link|mark|marquee|math|meta|"
+    r"noscript|object|option|p|picture|pre|q|s|script|select|slot|small|source|span|strong|"
+    r"style|sub|summary|sup|svg|table|td|template|textarea|th|tr|u|video)(?=[\s/>]|$)",
+    re.IGNORECASE,
+)
+# Bare domains (no scheme, no www.) in practices/. Every dotted name counts,
+# except a common file extension with no path after it (README.md,
+# install.sh, Node.js, uv.lock); with a path (get.sh/start) it counts too.
 _BARE_DOMAIN_RE = re.compile(
     r"(?<![\w@./:%-])(?!www\.)((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,24}))(/\S*)?",
     re.IGNORECASE,
 )
-_STRONG_TLDS = frozenset(
-    ["com", "net", "org", "io", "dev", "app", "co", "ai", "xyz", "info", "biz", "ly", "gg", "cc", "tk", "ru", "cn", "top", "site", "online", "link", "click", "live", "store", "tech", "cloud", "page", "run", "pro", "us", "uk", "de", "fr", "eu", "ca", "au", "me", "tv", "ws", "su", "pw", "icu", "shop", "work"]
+_FILE_EXTENSIONS = frozenset(
+    {
+        "md", "markdown", "txt", "rst", "toml", "yaml", "yml", "json", "jsonc", "lock", "cfg", "ini",
+        "env", "conf", "py", "pyi", "sh", "bash", "zsh", "ps1", "js", "mjs", "cjs", "ts", "tsx", "jsx",
+        "rs", "go", "rb", "java", "kt", "swift", "cpp", "hpp", "cs", "php", "pl", "lua", "sql", "html",
+        "htm", "css", "scss", "csv", "log", "xml", "svg", "png", "jpg", "jpeg", "gif", "webp", "avif",
+        "pdf", "zip", "gz", "tgz", "tar", "mov", "mp4", "wasm", "so", "dll", "exe", "bin", "whl",
+        "service", "socket", "timer", "crt", "key", "pem", "pub", "patch", "diff", "tf", "hcl", "vue",
+        "svelte", "astro", "dockerfile", "gitignore", "dockerignore", "example", "sample", "bak",
+    }
 )
-_PATH_ONLY_TLDS = frozenset(["md", "sh", "py", "rs", "pl", "so", "to", "it", "is", "at", "in", "do", "ms", "ps", "zip", "mov", "sk", "lk"])
 # Cyrillic and Greek letters that render like Latin ones: a subset of
 # Unicode's confusables.txt, enough for English prose. Code points rather
 # than literals, so this file holds no homoglyphs itself.
@@ -149,9 +172,17 @@ _CONFUSABLES = {
     0x03C4: "t", 0x03C5: "u", 0x0391: "A", 0x0392: "B", 0x0395: "E", 0x0396: "Z", 0x0397: "H",
     0x0399: "I", 0x039A: "K", 0x039C: "M", 0x039D: "N", 0x039F: "O", 0x03A1: "P", 0x03A4: "T",
     0x03A5: "Y", 0x03A7: "X",
+    # Latin lookalikes NFKD leaves alone (dotless i, script g, alpha, sharp s)
+    0x0131: "i", 0x0237: "j", 0x0261: "g", 0x0251: "a", 0x00DF: "ss",
+    # Armenian
+    0x0585: "o", 0x057D: "u", 0x0578: "n", 0x0570: "h", 0x0566: "q", 0x0581: "g", 0x0531: "U",
+    # Cherokee capitals
+    0x13A0: "D", 0x13A1: "R", 0x13A2: "T", 0x13AA: "A", 0x13AB: "J", 0x13AC: "E", 0x13B3: "W",
+    0x13B7: "M", 0x13BB: "H", 0x13C0: "G", 0x13C3: "Z", 0x13DA: "S", 0x13DE: "L", 0x13DF: "C",
+    0x13E2: "P", 0x13E6: "K", 0x13F4: "B",
 }
 _LETTER_RUN_RE = re.compile(r"[^\W\d_]+")
-_SCRIPTS = ("LATIN", "CYRILLIC", "GREEK")
+
 _MD_COMMENT_RE = re.compile(r"^\s*\[[^\]]*\]:\s*(#|<>)")
 # Lines are split on "\n" only (a trailing "\r" is dropped first), so every
 # other separator and control character reaches the hidden-character check.
@@ -288,16 +319,35 @@ def _skeleton(text: str) -> str:
     return "".join(ch for ch in folded if unicodedata.category(ch) != "Mn").translate(_CONFUSABLES)
 
 
-def _mixed_script_words(line: str) -> list[str]:
+def _fold_accents(word: str) -> str:
+    """NFKD with combining marks dropped, nothing else mapped."""
+    return "".join(ch for ch in unicodedata.normalize("NFKD", word) if unicodedata.category(ch) != "Mn")
+
+
+def _homoglyph_words(line: str, *, ascii_only: bool) -> list[str]:
+    """Words that look like English but aren't.
+
+    - Any word mixing ASCII letters with letters from a non-Latin script
+      (Cyrillic, Greek, Armenian, Cherokee, fullwidth forms, ...).
+    - A word made only of non-ASCII letters that folds to ASCII letters
+      (an all-Cyrillic "pop").
+    - With ascii_only (practices/), any non-ASCII letter at all: practice
+      rules are English, so there's nothing to tell apart from a lookalike.
+    """
     words = []
     for match in _LETTER_RUN_RE.finditer(line):
-        scripts = {
-            name.split(" ", 1)[0]
-            for name in (unicodedata.name(ch, "") for ch in match.group(0))
-            if name.startswith(_SCRIPTS)
-        }
-        if len(scripts) > 1:
-            words.append(match.group(0))
+        word = match.group(0)
+        non_ascii = [ch for ch in word if not ch.isascii()]
+        if not non_ascii:
+            continue
+        has_ascii = len(non_ascii) < len(word)
+        non_latin = any(not unicodedata.name(ch, "").startswith("LATIN ") for ch in non_ascii)
+        folded = _skeleton(word)
+        # Accented Latin (cafe with an accent) folds to ASCII and is fine; a
+        # Latin letter that doesn't fold (dotless i, sharp s) is a lookalike.
+        mixed = has_ascii and (non_latin or not _fold_accents(word).isascii())
+        if ascii_only or mixed or (not has_ascii and folded.isascii() and folded.isalpha()):
+            words.append(word)
     return words
 
 
@@ -347,7 +397,7 @@ def _bare_domain_problems(line: str, allowed: tuple[str, ...]) -> list[str]:
     problems = []
     for match in _BARE_DOMAIN_RE.finditer(line):
         tld, path = match.group(2).lower(), match.group(3)
-        if tld in _STRONG_TLDS or (tld in _PATH_ONLY_TLDS and path):
+        if path or tld not in _FILE_EXTENSIONS:
             problem = _url_problem(match.group(0).rstrip(_URL_TRAILING), allowed)
             if problem:
                 problems.append(f"bare domain: {problem}")
@@ -379,12 +429,15 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
             findings.append(Finding(rel, number, "comment", "HTML comment (renders as nothing; agents still read it)", line))
         elif _MD_COMMENT_RE.match(line):
             findings.append(Finding(rel, number, "comment", "Markdown link-reference comment (renders as nothing)", line))
-        mixed = _mixed_script_words(line)
-        if mixed:
-            findings.append(
-                Finding(rel, number, "homoglyph", "word(s) mixing Latin with Cyrillic or Greek letters: " + ", ".join(ascii(w) for w in mixed), line)
-            )
-        if top in INSTRUCTION_DIRS and not in_fence and not fence and _HTML_TAG_RE.search(_INLINE_CODE_RE.sub("", line)):
+        lookalikes = _homoglyph_words(line, ascii_only=top == "practices")
+        if lookalikes:
+            what = "non-ASCII letters in a practice" if top == "practices" else "lookalike letters"
+            findings.append(Finding(rel, number, "homoglyph", f"{what}: " + ", ".join(ascii(w) for w in lookalikes), line))
+        if top in INSTRUCTION_DIRS and (
+            _HTML_ATTR_TAG_RE.search(line)
+            or _HTML_ELEMENT_RE.search(line)
+            or (not in_fence and not fence and _HTML_TAG_RE.search(_INLINE_CODE_RE.sub("", line)))
+        ):
             findings.append(Finding(rel, number, "html", "raw HTML tag outside code (can hide text or carry handlers)", line))
         if top == "practices":
             for match in _URL_RE.finditer(line):
