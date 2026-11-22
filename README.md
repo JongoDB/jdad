@@ -277,6 +277,13 @@ Before touching the running container it checks that `JDAD_UID` isn't 0; that th
 
 `JDAD_ALLOWED_HOSTS` entries are lowercased, and wildcard entries such as `*` or `*.jondevs.com` are rejected at startup. Public hosts get `https://` origins only; `http://` origins are allowed for loopback.
 
+### Operations
+
+- `./deploy/update-docker.sh` builds before it swaps. The image build runs `jdad-mcp --check` (every KB file through the tools' read paths), so a commit that breaks the KB never replaces the running container. If a commit builds but fails the health check, the script rolls back, resets the checkout to the rolled-back SHA, and records the failed SHA in `~/.config/jdad/failed-sha`. The next run refuses that SHA until `main` moves on, or `JDAD_RETRY_FAILED=1` is set (use it when the failure had an outside cause, such as a certificate problem, that is now fixed). A successful deploy clears the record.
+- The container is capped at 512 MB of memory, 256 processes and 1 CPU, and its json-file logs rotate at 10 MB × 3.
+- Runbooks: [rebuild the endpoint from nothing](docs/ops/rebuild-runbook.md) (including the stopped NetBird stack and monitoring) and [rotate the bearer token](docs/ops/token-rotation.md).
+- `.github/workflows/uptime.yml` probes `/healthz` through Cloudflare four times an hour once the repo is public.
+
 ## Alternative: systemd on a host
 
 This is not how the DigitalOcean droplet is run. `deploy/install.sh` remains for a host-installed layout.

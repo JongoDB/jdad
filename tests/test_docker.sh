@@ -134,6 +134,18 @@ if not any(str(p.get("published")) == "443" and p.get("target") == 8443 for p in
 if svc.get("image") != f"jdad:{sys.argv[2]}":
     sys.exit(f"FAIL default image is {svc.get('image')!r}")
 print("ok defaults: publishes 443:8443 and tags jdad:<sha>")
+mem = svc.get("mem_limit")
+if str(mem) not in {"512m", str(512 * 1024 * 1024)}:
+    sys.exit(f"FAIL mem_limit is {mem!r}, expected 512m")
+if svc.get("pids_limit") != 256:
+    sys.exit(f"FAIL pids_limit is {svc.get('pids_limit')!r}, expected 256")
+if float(svc.get("cpus") or 0) != 1.0:
+    sys.exit(f"FAIL cpus is {svc.get('cpus')!r}, expected 1.0")
+log = svc.get("logging") or {}
+opts = log.get("options") or {}
+if log.get("driver") != "json-file" or opts.get("max-size") != "10m" or str(opts.get("max-file")) != "3":
+    sys.exit(f"FAIL logging is {log!r}, expected json-file with max-size 10m, max-file 3")
+print("ok limits: mem 512m, pids 256, cpus 1.0, json-file logs rotated at 10m x 3")
 PY
 
 # --- canary: stray env/key under src/ and practices/ must not be in the image
@@ -296,6 +308,12 @@ if docker inspect "$cid" | grep -qF "$token"; then
   exit 1
 fi
 echo "ok docker inspect shows JDAD_TOKEN_FILE, not the token"
+limits="$(docker inspect -f '{{.HostConfig.Memory}} {{.HostConfig.PidsLimit}} {{.HostConfig.NanoCpus}} {{.HostConfig.LogConfig.Type}} {{index .HostConfig.LogConfig.Config "max-size"}} {{index .HostConfig.LogConfig.Config "max-file"}}' "$cid")"
+if [[ "$limits" != "536870912 256 1000000000 json-file 10m 3" ]]; then
+  echo "FAIL running container limits are '$limits'" >&2
+  exit 1
+fi
+echo "ok the running container has the memory, pids, cpu and log limits"
 
 # kb_version SHA is the baked git SHA
 check_kb_sha() {
@@ -467,15 +485,56 @@ if JDAD_HEALTH_HOST=not-covered.example run_update > "$WORKDIR/certname.log" 2>&
 fi
 grep -qi "subject name\|does not match\|certificate" "$WORKDIR/certname.log" \
   || { cat "$WORKDIR/certname.log" >&2; echo "FAIL no certificate error in the update log" >&2; exit 1; }
-if ! run_update > "$WORKDIR/recover.log" 2>&1; then
-  echo "FAIL update-docker.sh did not recover with the right health host" >&2
+echo "ok the health probe verifies the origin certificate for the public name (no -k)"
+# That failure recorded the SHA; once the cause is fixed, a retry needs the
+# explicit override, and a successful deploy clears the record.
+if run_update > "$WORKDIR/recover.log" 2>&1; then
+  echo "FAIL a recorded failed SHA was redeployed without JDAD_RETRY_FAILED=1" >&2
+  exit 1
+fi
+grep -q "failed its health check on an earlier run" "$WORKDIR/recover.log" \
+  || { cat "$WORKDIR/recover.log" >&2; echo "FAIL no 'earlier run' refusal" >&2; exit 1; }
+if ! JDAD_RETRY_FAILED=1 run_update > "$WORKDIR/recover.log" 2>&1; then
+  echo "FAIL update-docker.sh did not recover with JDAD_RETRY_FAILED=1 and the right health host" >&2
   cat "$WORKDIR/recover.log" >&2
   exit 1
 fi
-echo "ok the health probe verifies the origin certificate for the public name (no -k)"
+if [[ -e "$TESTHOME/.config/jdad/failed-sha" ]]; then
+  echo "FAIL a successful deploy left the failed-sha record" >&2
+  exit 1
+fi
+echo "ok a recorded failed SHA needs JDAD_RETRY_FAILED=1, and success clears the record"
 
-# --- real rollback: a broken commit, the real health URL (no override)
-printf '\nraise SystemExit("deliberately broken build for the rollback test")\n' >> "$CLONE/src/jdad/server.py"
+# --- a commit that breaks only the KB fails the build (jdad-mcp --check)
+# and never replaces the running container.
+printf '# Bad\n\xff\xfe\n' > "$CLONE/practices/broken.md"
+git -C "$CLONE" add practices/broken.md
+git -C "$CLONE" -c user.name=jdad-test -c user.email=jdad-test@example.invalid \
+  commit -q -m "test: KB file that is not UTF-8"
+if run_update > "$WORKDIR/kbbreak.log" 2>&1; then
+  echo "FAIL update-docker.sh deployed a commit whose KB doesn't load" >&2
+  cat "$WORKDIR/kbbreak.log" >&2
+  exit 1
+fi
+grep -q "practices/broken.md: not valid UTF-8" "$WORKDIR/kbbreak.log" \
+  || { cat "$WORKDIR/kbbreak.log" >&2; echo "FAIL jdad-mcp --check did not name the broken file" >&2; exit 1; }
+grep -q "the running container was not touched" "$WORKDIR/kbbreak.log" \
+  || { cat "$WORKDIR/kbbreak.log" >&2; echo "FAIL no 'not touched' message" >&2; exit 1; }
+if [[ "$(running_image)" != "$IMG:$GOOD" ]]; then
+  echo "FAIL a KB-only break changed the running image to $(running_image)" >&2
+  exit 1
+fi
+git -C "$CLONE" reset -q --hard "$GOOD"
+echo "ok a commit that breaks only the KB fails the build and leaves the running container alone"
+
+# --- real rollback: a commit that builds (and passes --check) but whose
+# HTTP server can't start, probed through the real health URL (no override)
+cat >> "$CLONE/src/jdad/server.py" <<'PY'
+
+
+def create_http_app(token=None):  # noqa: F811 - deliberately broken for the rollback test
+    raise SystemExit("deliberately broken HTTP app for the rollback test")
+PY
 git -C "$CLONE" -c user.name=jdad-test -c user.email=jdad-test@example.invalid \
   commit -q -am "test: deliberately broken"
 BROKEN="$(git -C "$CLONE" rev-parse HEAD)"
@@ -505,3 +564,27 @@ fi
 wait_healthy || { echo "FAIL service not healthy after rollback" >&2; exit 1; }
 check_kb_sha "$(base_url)" "$GOOD"
 echo "ok update-docker.sh rolls back a broken commit to $IMG:$GOOD"
+
+if [[ "$(git -C "$CLONE" rev-parse HEAD)" != "$GOOD" ]]; then
+  echo "FAIL after rollback the checkout is at $(git -C "$CLONE" rev-parse HEAD), expected $GOOD" >&2
+  exit 1
+fi
+if [[ "$(head -n1 "$TESTHOME/.config/jdad/failed-sha" 2>/dev/null)" != "$BROKEN" ]]; then
+  echo "FAIL the failed SHA was not recorded" >&2
+  exit 1
+fi
+echo "ok after rollback the checkout is back on $GOOD and $BROKEN is recorded as failed"
+
+# The next run must not rebuild the same broken commit.
+git -C "$CLONE" reset -q --hard "$BROKEN"
+if run_update > "$WORKDIR/again.log" 2>&1; then
+  echo "FAIL update-docker.sh redeployed a commit that already failed" >&2
+  exit 1
+fi
+grep -q "failed its health check on an earlier run" "$WORKDIR/again.log" \
+  || { cat "$WORKDIR/again.log" >&2; echo "FAIL no 'earlier run' refusal" >&2; exit 1; }
+if [[ "$(running_image)" != "$IMG:$GOOD" ]]; then
+  echo "FAIL the refusal changed the running image" >&2
+  exit 1
+fi
+echo "ok a SHA that failed before is refused on the next run"
