@@ -152,6 +152,8 @@ A local `.mcp.json` (stdio is also fine) looks like this:
 }
 ```
 
+That example is loopback only. To reach the server from another machine on your LAN (for example `http://192.168.1.20:8765/mcp` or a LAN hostname), the server must also bind a non-loopback address (`--host 0.0.0.0` or the LAN IP, which requires `JDAD_TOKEN`), and `JDAD_ALLOWED_HOSTS` must list the name or IP the client puts in `Host` (for example `JDAD_ALLOWED_HOSTS=192.168.1.20:8765,jdad.lan`). Otherwise the request gets `421 Invalid Host header`. Plain HTTP on a LAN sends the token unencrypted; prefer TLS (`--ssl-certfile` / `--ssl-keyfile`) or stdio.
+
 Stdio still works if you would rather run the server locally, including `uvx --from git+https://github.com/JongoDB/jdad jdad-mcp` (or `git+ssh://git@github.com/JongoDB/jdad`) with `gh auth` or an SSH key on the host.
 
 ## Deploy on a droplet with Docker behind Cloudflare proxy
@@ -223,8 +225,10 @@ The checkout on the droplet pulls this private repo as the deploy user (no passw
 
 Generate the bearer token straight into the env file; never echo it. To rotate, write a new token the same way, run `./deploy/update-docker.sh`, then update every client. The previous token stops working immediately.
 
+Use a dedicated **non-root** deploy user in the `docker` group (on a fresh DigitalOcean droplet you log in as root; create the user first, for example `adduser deploy && usermod -aG docker deploy`). The container runs as the deploy user's uid, and `update-docker.sh` refuses to run with `JDAD_UID=0`.
+
 ```bash
-# as the deploy user, who can talk to the docker daemon
+# as the non-root deploy user, who can talk to the docker daemon
 git clone git@github.com:JongoDB/jdad.git
 cd jdad
 
@@ -248,17 +252,21 @@ docker compose -f deploy/docker-compose.yml up -d --build
 curl -fsSk https://127.0.0.1/healthz
 ```
 
+> **Warning:** `docker compose -f deploy/docker-compose.yml config` prints the fully expanded config, including `JDAD_TOKEN` from the env file. Don't paste its output into chats, tickets, PRs or logs. To check the file without values, use `docker compose -f deploy/docker-compose.yml config --quiet` (exit code only).
+
 `deploy/docker-compose.yml` uses the project name `jdad` (so this first install and `update-docker.sh` are the same compose project), builds from the repo with `JDAD_GIT_SHA` baked into the image, publishes `443:8443`, restarts unless stopped, reads `~/.config/jdad/jdad.env`, mounts `~/.config/jdad/tls/` read-only, sets `JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com` (Origin `https://jdad-mcp.jondevs.com` is also allowed), and runs with a read-only root filesystem, `tmpfs` on `/tmp`, `cap_drop: [ALL]`, and `no-new-privileges`. The container process runs as the deploy user's uid so it can read a `0600` key. It binds `0.0.0.0:8443` with TLS, so it will refuse to start without `JDAD_TOKEN`. `--allow-no-auth` is not used.
 
 `jdad-mcp` also accepts `--ssl-certfile` / `--ssl-keyfile`, or `JDAD_SSL_CERTFILE` / `JDAD_SSL_KEYFILE`.
 
-Later updates (idempotent; prechecks the env file and cert; fails loudly; rolls back to the previous image if healthz fails):
+Later updates (idempotent; fails loudly; rolls back to the previous image if healthz fails):
 
 ```bash
 ./deploy/update-docker.sh
 ```
 
-That sets `JDAD_GIT_SHA` from `git rev-parse HEAD`, does `git pull --ff-only`, `docker compose up -d --build`, then curls `https://127.0.0.1/healthz` and requires `{"status":"ok"}`.
+Before touching the running container it checks that the env file has a non-empty `JDAD_TOKEN`, that the certificate is a readable, unexpired PEM whose public key matches the private key (`openssl x509 -pubkey` vs `openssl pkey -pubout`), that the key isn't world-readable, and that `JDAD_UID` isn't 0. Then it sets `JDAD_GIT_SHA` from `git rev-parse HEAD`, does `git pull --ff-only`, `docker compose up -d --build`, and curls `https://127.0.0.1:<published port>/healthz` (443 in production), requiring `{"status":"ok"}`. After a healthy update it prunes old `jdad:<sha>` images, keeping the current one and the previous one (also tagged `jdad:previous`) for rollback.
+
+`JDAD_ALLOWED_HOSTS` entries are lowercased, and wildcard entries such as `*` or `*.jondevs.com` are rejected at startup. Public hosts get `https://` origins only; `http://` origins are allowed for loopback.
 
 ## Alternative: systemd on a host
 
@@ -373,4 +381,4 @@ uv sync
 ./verify
 ```
 
-`./verify` runs `bash -n` on each deploy script, a version-lockstep check, a sandboxed invocation/token-parsing check (it drops privileges if run as root, and will not run a real `install.sh` against the host), a Docker image and compose smoke test when Docker is available (it skips with a note when it isn't), ruff, pytest, `uv build`, and `claude plugin validate` when the Claude CLI is on `PATH` (it skips that last step with a note when it isn't). GitHub Actions is set up to run the same script on pull requests and on pushes to `main`, with `permissions: contents: read` and actions pinned to SHAs. That check is currently billing-blocked on this repo (red check; the job never starts), so local `./verify` is the proof until billing is fixed.
+`./verify` runs `bash -n` on each deploy script, `uv lock --check`, a version-lockstep check, a sandboxed invocation/token-parsing check (it drops privileges if run as root, and will not run a real `install.sh` against the host), a Docker image and compose smoke test when Docker is available (it skips with a note when it isn't; it runs under its own compose project `jdad-test-<pid>`, image repo and an ephemeral loopback port, refuses to run if a compose project named `jdad` exists on the daemon, and tests `update-docker.sh` rollback with a deliberately broken commit), ruff, pytest, `uv build`, and `claude plugin validate` when the Claude CLI is on `PATH` (it skips that last step with a note when it isn't). GitHub Actions is set up to run the same script on pull requests and on pushes to `main`, with `permissions: contents: read` and actions pinned to SHAs. That check is currently billing-blocked on this repo (red check; the job never starts), so local `./verify` is the proof until billing is fixed.

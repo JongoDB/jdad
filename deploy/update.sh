@@ -10,7 +10,7 @@ source "$HERE/common.sh"
 
 UV="$(resolve_uv)"
 
-if [[ ! -d "$JDAD_ROOT/.git" ]]; then
+if ! is_git_checkout "$JDAD_ROOT" run_as_jdad; then
   echo "jdad: no git checkout at $JDAD_ROOT" >&2
   exit 1
 fi

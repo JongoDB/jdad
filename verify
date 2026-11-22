@@ -9,20 +9,27 @@ for script in deploy/common.sh deploy/install.sh deploy/update.sh deploy/update-
   bash -n "$script"
 done
 
+echo "==> uv.lock is current"
+# Before any `uv run`, which would silently relock and hide drift.
+uv lock --check
+
 echo "==> versions agree"
-uv run python tests/check_versions.py
+uv run --frozen python tests/check_versions.py
 
 echo "==> deploy invocation and token parsing"
 bash tests/test_deploy_invocation.sh
+
+echo "==> git checkout detection (clone and worktree)"
+bash tests/test_git_checkout.sh
 
 echo "==> docker image"
 bash tests/test_docker.sh
 
 echo "==> ruff"
-uv run ruff check src tests
+uv run --frozen ruff check src tests
 
 echo "==> pytest"
-uv run pytest
+uv run --frozen pytest
 
 echo "==> uv build"
 uv build
@@ -31,7 +38,7 @@ if command -v claude >/dev/null 2>&1; then
   echo "==> claude plugin validate"
   claude plugin validate .
 else
-  echo "==> claude plugin validate: skipped (claude CLI not found)"
+  echo "==> claude plugin validate: skipped (claude CLI not found on this machine; run it where the CLI is installed before merging)"
 fi
 
 echo "verify: ok"

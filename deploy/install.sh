@@ -69,7 +69,7 @@ UV="$(resolve_uv)"
 
 install -d -o "$JDAD_USER" -g "$JDAD_USER" -m 0755 "$JDAD_ROOT"
 
-if [[ ! -d "$JDAD_ROOT/.git" ]]; then
+if ! is_git_checkout "$JDAD_ROOT" run_as_jdad; then
   if [[ -n "$(ls -A "$JDAD_ROOT" 2>/dev/null || true)" ]]; then
     echo "jdad: $JDAD_ROOT exists and is not an empty git checkout; refusing to clone into it" >&2
     exit 1

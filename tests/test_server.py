@@ -504,6 +504,39 @@ def test_allowed_hosts_include_public_origin(monkeypatch: pytest.MonkeyPatch) ->
     assert "https://jdad-mcp.jondevs.com:*" in settings.allowed_origins
 
 
+def test_allowed_hosts_are_lowercased() -> None:
+    from jdad.server import parse_allowed_hosts
+
+    assert parse_allowed_hosts("JDAD.Example, https://Other.EXAMPLE/mcp") == [
+        "jdad.example",
+        "other.example",
+    ]
+
+
+@pytest.mark.parametrize("raw", ["*", "jdad.example,*", "*.jondevs.com", "jdad.example:*"])
+def test_allowed_hosts_reject_wildcards(raw: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from jdad.server import AllowedHostsError, main, parse_allowed_hosts
+
+    with pytest.raises(AllowedHostsError, match="wildcard"):
+        parse_allowed_hosts(raw)
+    # The CLI refuses to start instead of serving with a misconfigured list.
+    monkeypatch.setenv("JDAD_ALLOWED_HOSTS", raw)
+    monkeypatch.delenv("JDAD_TOKEN", raising=False)
+    with pytest.raises(SystemExit, match="wildcard"):
+        main(["--http", "--host", "127.0.0.1", "--port", "0"])
+
+
+def test_public_hosts_get_https_origins_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    from jdad.server import transport_security_settings
+
+    monkeypatch.setenv("JDAD_ALLOWED_HOSTS", "jdad-mcp.jondevs.com")
+    origins = transport_security_settings().allowed_origins
+    public = [o for o in origins if "jondevs" in o]
+    assert public and all(o.startswith("https://") for o in public), public
+    # Loopback http origins stay allowed for local clients.
+    assert any(o.startswith("http://127.0.0.1") for o in origins)
+
+
 def test_quoted_empty_token_is_unset() -> None:
     from jdad.server import InsecureBindError, check_http_bind, normalize_secret
 
