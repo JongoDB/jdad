@@ -313,7 +313,16 @@ class KnowledgeBase:
         return kb_markdown_files(self.root, self.sources_dir)
 
     def practices(self) -> list[PracticeDoc]:
-        return [parse_practice(path, root=self.root) for path in self.practice_paths()]
+        """Every practice file that reads and parses. One that doesn't (bad
+        UTF-8, swapped for a symlink after listing) is logged and skipped, so
+        it can't break every listing tool (M3); `jdad lint-kb` still fails."""
+        docs: list[PracticeDoc] = []
+        for path in self.practice_paths():
+            try:
+                docs.append(parse_practice(path, root=self.root))
+            except (OSError, UnicodeDecodeError, ValueError) as exc:
+                logger.warning("skipping practice %s: %s: %s", path.name, type(exc).__name__, exc)
+        return docs
 
     def list_topics(self) -> list[dict]:
         topics = []
@@ -335,7 +344,11 @@ class KnowledgeBase:
     def list_sources(self) -> list[dict]:
         items = []
         for path in self.source_paths():
-            text = read_kb_file(path)
+            try:
+                text = read_kb_file(path)
+            except (OSError, UnicodeDecodeError) as exc:
+                logger.warning("skipping source %s: %s: %s", path.name, type(exc).__name__, exc)
+                continue
             items.append(
                 {
                     "id": path.stem,
