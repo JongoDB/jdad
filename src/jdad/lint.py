@@ -159,6 +159,7 @@ _BARE_DOMAIN_RE = re.compile(
     r"(?<![\w@./:%-])(?!www\.)((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,24}))(/\S*)?",
     re.IGNORECASE,
 )
+_RULE_ID_TAIL_RE = re.compile(r"\s*\{#[a-z0-9][a-z0-9.-]*\}\s*$")
 _FILE_EXTENSIONS = frozenset(
     {
         "md", "markdown", "txt", "rst", "toml", "yaml", "yml", "json", "jsonc", "lock", "cfg", "ini",
@@ -454,7 +455,9 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
                 problem = _url_problem(match.group(1).rstrip(_URL_TRAILING), config.url_allow)
                 if problem:
                     findings.append(Finding(rel, number, "url", problem, line))
-            for problem in _bare_domain_problems(line, config.url_allow):
+            # A rule's trailing {#perf.db.n-plus-one} ID (docs/kb-schema.md) is
+            # dotted like a domain; the rule-id check validates it instead.
+            for problem in _bare_domain_problems(_RULE_ID_TAIL_RE.sub("", line), config.url_allow):
                 findings.append(Finding(rel, number, "url", problem, line))
     if top in INSTRUCTION_DIRS:
         findings.extend(_injection_findings(rel, lines))
