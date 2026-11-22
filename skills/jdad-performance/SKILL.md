@@ -1,6 +1,8 @@
 ---
 name: jdad-performance
 description: Use when building, reviewing, or speeding up an application — page load, API or backend latency, N+1 queries, indexes, connection pooling, caching, CDNs, job queues, OpenTelemetry, Core Web Vitals, or tests on slow devices and networks. Applies Jon's JDAD performance checklist.
+metadata:
+  generated: jdad build from catalog/skills/jdad-performance/SKILL.md; do not edit
 ---
 
 # JDAD performance

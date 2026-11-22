@@ -35,6 +35,7 @@ uv run --frozen python -m jdad.catalog validate
 for skill in catalog/skills/*/; do
   uv run --frozen agentskills validate "$skill"
 done
+uv run --frozen jdad build --check
 
 echo "==> deploy invocation and token parsing"
 bash tests/test_deploy_invocation.sh

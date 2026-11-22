@@ -13,6 +13,7 @@ JDAD (Jon-does-agentic-dev) is an opinionated knowledge base, MCP server, skills
 
 - `./verify`: the full check (versions, deploy scripts, Docker smoke test when Docker is up, ruff, pytest, build, `claude plugin validate` when the CLI is present). It must end `verify: ok`.
 - `./verify --fast`: ruff and pytest only, in seconds. Run it before you say you're done (R-flow-8).
+- `uv run jdad build`: compile `catalog/` into the plugin's `skills/` and `generated/` (`--check` only compares).
 - `uv run pytest`: tests only.
 - `uv run jdad-mcp` (stdio) or `uv run jdad-mcp --http` (streamable HTTP on `127.0.0.1:8765`).
 
@@ -39,7 +40,7 @@ Every normative rule has an ID. `tests/test_instructions.py` checks that each ID
 | R-kb-3 | Fold the useful rules into `practices/<topic>.md`, or a new topic file if none fits. Deduplicate: if a rule already exists, add a source citation instead of repeating it. |
 | R-kb-4 | Tag every practice section with one or more of `[frontend]` `[backend]` `[db]` `[infra]` `[observability]` `[testing]`. |
 | R-kb-5 | Cite the source on each rule, e.g. `(src: breakingbreach #8)`. Label a rule that didn't come from a source as a KB addition (see Rule zero in `practices/performance.md`). Add an "applies when" note when a rule is easy to over-apply. |
-| R-kb-6 | One skill per practice topic: a new `practices/<topic>.md` gets `catalog/skills/jdad-<topic>/SKILL.md` (the canonical copy, spec in `catalog/README.md`), with a description that will auto-trigger and the rules (or a pointer to `get_practice`) in the body. Copy it to `skills/` until `jdad build` (P1.5) generates that. |
+| R-kb-6 | One skill per practice topic: a new `practices/<topic>.md` gets `catalog/skills/jdad-<topic>/SKILL.md` (the canonical copy, spec in `catalog/README.md`), with a description that will auto-trigger and the rules (or a pointer to `get_practice`) in the body. Then run `uv run jdad build`, which generates `skills/` and `generated/`; never edit those by hand. |
 | R-kb-7 | After a KB change, run `uv run pytest` and check the entry is reachable through the MCP tools: `list_topics` or `list_sources`, a search or checklist that hits the new rules, and `kb_version` showing the new entry date when the file name is dated. |
 | R-kb-8 | Never rewrite a `sources/` file to match a cleaned-up practice. The source file is the record of the source; the practice file is the advice. |
 | R-kb-9 | Never merge this repo's practices into another project's instructions file from here. Other repos query the MCP server, or copy a checklist, themselves. |
