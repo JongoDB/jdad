@@ -88,7 +88,8 @@ Source: https://code.claude.com/docs/en/mcp
 Sources: https://code.claude.com/docs/en/headless, https://code.claude.com/docs/en/agent-sdk/overview
 
 - `claude -p "<prompt>" --allowedTools ... --output-format json`. "`--bare` is the recommended mode for scripted and SDK calls" and skips hooks, skills, plugins, MCP, memory and CLAUDE.md discovery. Without `--bare`, `-p` runs a project's hooks and MCP servers "even in a folder you've never trusted."
-- `--max-turns` and `--max-budget-usd` bound a scripted run.
+- In bare mode "Claude Code never reads OAuth credentials or the system keychain": set `ANTHROPIC_API_KEY` (or an `apiKeyHelper`). Bare mode also skips hooks, skills, plugins, MCP servers, memory and CLAUDE.md unless they're passed explicitly, which matters for evals (ROADMAP P6.2).
+- `--max-turns` and `--max-budget-usd` bound a scripted run (from https://code.claude.com/docs/en/best-practices, not the headless page).
 
 ## Borrow / skip
 

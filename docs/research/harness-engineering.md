@@ -68,11 +68,12 @@ Sources: https://github.com/github/spec-kit, https://kiro.dev/docs/specs/, https
 
 ## Verification loops and independent review
 
-Sources: https://code.claude.com/docs/en/best-practices, the two Anthropic harness posts, the OpenAI post, and JDAD's own Checker practice.
+Sources: https://code.claude.com/docs/en/best-practices, https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents, https://www.anthropic.com/engineering/harness-design-long-running-apps, https://openai.com/index/harness-engineering/, and JDAD's own Checker practice.
 
 - A single pass/fail command is the most useful line in an instructions file. JDAD's `./verify` already follows this.
 - Enforce it: a `Stop` hook (Claude Code), CI on every PR, branch protection.
-- Tests are the oracle. Agents must not edit or delete tests to pass (Anthropic: "It is unacceptable to remove or edit tests"). Checker already flags weakened tests.
+- Tests are the oracle, and agents must not weaken or delete test code to make it pass. This is a JDAD rule that Checker enforces (it flags weakened tests); it is not a quote from the Claude Code docs.
+- A related, narrower rule comes from Anthropic's long-running-harness post (https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents). There, coding agents could only flip the `passes` field in the JSON feature list, under the instruction "It is unacceptable to remove or edit tests because this could lead to missing or buggy functionality." In that post, "tests" means the feature-list entries (end-to-end feature checks), not test code.
 - Separate reviewer, fresh context, scoped to spec and correctness, "skip style."
 - PRs carry evidence (commands and output) and an explicit Unverified list. This is JDAD's existing Checker proof standard.
 

@@ -13,7 +13,7 @@ Confirmed. Grok Build is xAI's terminal coding agent (`grok`). It runs as a full
 Source: https://docs.x.ai/build/features/project-rules
 
 - Loads global rules in `~/.grok/`, then every directory from the repo root to the working directory. "Within each directory, Grok reads any of `AGENTS.md`, `Agents.md`, `AGENT.md`, `CLAUDE.md`, `Claude.md`, and `CLAUDE.local.md`, plus every `*.md` file in a `.grok/rules/` directory (`.claude/rules/` and `.cursor/rules/` are read for compatibility)."
-- Gitignored files are skipped. The repo's user guide says Grok "loads every matching file in a directory, so a folder that contains both `AGENTS.md` and `CLAUDE.md` contributes both."
+- Gitignored files are skipped. The repo's user guide (https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/12-project-rules.md) says Grok "loads every matching file in a directory, so a folder that contains both `AGENTS.md` and `CLAUDE.md` contributes both."
 - "Files are loaded in full, with no size cap; short, specific instructions are followed more reliably than long ones."
 - `--rules "<text>"` appends to the system prompt for one run.
 
@@ -25,7 +25,7 @@ Source: https://docs.x.ai/build/features/skills-plugins-marketplaces
 - Plugins: skills, agents, hooks, MCP servers, LSP servers. Loaded from `./.grok/plugins/`, `~/.grok/plugins/`, marketplace installs, `--plugin-dir`.
 - "Grok is fully compatible with Claude Code with zero configuration needed. Grok automatically reads Claude Code marketplaces, plugins, skills, MCPs, agents, hooks, and instruction files."
 - Marketplace sources: `[[marketplace.sources]]` in `~/.grok/config.toml` and `~/.grok/plugins/known_marketplaces.json`. CLI: `grok plugin <list|install|uninstall|update|enable|disable|details|validate>` and `grok plugin marketplace <list|add|remove|update>`.
-- The official marketplace repo uses `.grok-plugin/marketplace.json` (catalog with `name`, `owner`, `plugins[]`, URL sources pinned by `sha`). Superpowers installs with `grok plugin install superpowers@xai-official --trust`.
+- The official marketplace repo uses `.grok-plugin/marketplace.json` (catalog with `name`, `owner`, `plugins[]`, URL sources pinned by `sha`). Superpowers' README (https://github.com/obra/superpowers) gives the install command `grok plugin install superpowers@xai-official --trust`; the Grok docs page doesn't show that exact command.
 
 ## Hooks
 
@@ -47,7 +47,7 @@ Source: https://docs.x.ai/build/features/mcp-servers
 
 Sources: https://docs.x.ai/build/features/permissions, https://docs.x.ai/build/features/sandbox, https://docs.x.ai/build/features/plan-mode, https://docs.x.ai/build/features/subagents
 
-- Modes: Ask (default), Auto (classifier), Always-approve. `[permission] rules` with allow/deny per tool and pattern, merged across files with `deny > ask > allow`.
+- Modes: Ask (default), Auto (classifier), Always-approve. `[permission] rules` with allow/deny per tool and pattern (permissions page). The precedence rule, merged across files with `deny` > `ask` > `allow`, is in the repo user guide (https://github.com/xai-org/grok-build/blob/main/crates/codegen/xai-grok-pager/docs/user-guide/05-configuration.md) and https://docs.x.ai/llms-full.txt, not on the permissions page.
 - Sandbox is off by default; profiles `workspace`, `devbox`, `read-only`, `strict` (Landlock on Linux, Seatbelt on macOS). Built-ins do not protect `~/.ssh`; add a custom deny list.
 - Plan mode drafts a plan for approval before edits; "Auto and always-approve do not skip this review."
 - Subagents: built-in `general-purpose`, `explore`, `plan`; custom types in `.grok/agents/`.

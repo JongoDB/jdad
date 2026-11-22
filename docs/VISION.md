@@ -7,7 +7,7 @@ Research behind this page: [docs/research/](research/README.md). Decisions: [doc
 ## Principles
 
 1. **The repo is the system of record.** If an agent can't read it in the repo, it doesn't exist. Decisions from chat, calls and videos land in the repo as docs, ADRs, practices or lints. ([OpenAI, harness engineering](research/harness-engineering.md))
-2. **A map, not a manual.** `AGENTS.md` stays short (about 100 lines) and points to deeper docs. Procedures go in skills, area rules in path-scoped rules, facts in the instructions file. Context loads progressively.
+2. **A map, not a manual.** `AGENTS.md` stays short (at most 120 lines and under 32 KiB, checked by `tests/test_docs.py`) and points to deeper docs. Procedures go in skills, area rules in path-scoped rules, facts in the instructions file. Context loads progressively.
 3. **One source, every harness.** Write to the open floor (AGENTS.md, Agent Skills, MCP, Agent Plugins) once. Add a thin per-tool adapter only where a tool needs one. Never hand-maintain four copies.
 4. **Plan before code.** Non-trivial work starts with a written design and plan that state what "done" means and how it will be verified (a sprint contract). One item per session; leave a clean, mergeable state.
 5. **Every change has an oracle.** `./verify` returns pass or fail. Agents run it, CI runs it, and hooks enforce it. Tests are never weakened to pass.

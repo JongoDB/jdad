@@ -38,7 +38,7 @@ Sources: https://developers.openai.com/codex/skills, https://developers.openai.c
 
 ## Plugins and marketplaces
 
-Sources: https://developers.openai.com/codex/plugins, https://developers.openai.com/plugins/build/plugins
+Sources: https://developers.openai.com/codex/plugins (installing and browsing plugins in Codex), https://developers.openai.com/plugins/build/plugins (packaging; the quotes below are from this page)
 
 - "For a portable Agent Plugins package, add `plugin.json` at the plugin root and declare the Agent Plugins schema." OpenAI-specific settings go under `extensions.com.openai`. "Existing `.codex-plugin/plugin.json` files remain supported as a compatibility fallback."
 - Marketplace: `$REPO_ROOT/.agents/plugins/marketplace.json` (repo) or `~/.agents/plugins/marketplace.json` (personal); entries point `source.path` at plugin folders. `codex plugin marketplace add <owner/repo>` adds a remote one (seen in wshobson/agents' README).
@@ -60,7 +60,7 @@ Source: https://developers.openai.com/codex/noninteractive
 
 | Call | What | Why |
 | --- | --- | --- |
-| Borrow | `AGENTS.md` as the canonical instructions file, kept well under 32 KiB | Codex reads nothing else; the size cap is a hard limit |
+| Borrow | `AGENTS.md` as the canonical instructions file, kept well under 32 KiB | Codex's instruction chain is `AGENTS.override.md` / `AGENTS.md` plus any fallback names you configure; it doesn't read `CLAUDE.md` by default. 32 KiB is the default `project_doc_max_bytes`, which can be changed, so staying under it keeps the default working |
 | Borrow | Ship skills to `.agents/skills/` | Read by Codex, Cursor, and (user-level) Grok Build |
 | Borrow | `bearer_token_env_var = "JDAD_TOKEN"` in the Codex MCP template | Keeps the token out of config files |
 | Borrow | `sandbox_mode = "workspace-write"`, `approval_policy = "on-request"` as the template default | Least privilege that still lets the agent run `./verify` |

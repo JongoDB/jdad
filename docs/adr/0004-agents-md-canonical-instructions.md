@@ -6,9 +6,9 @@
 
 ## Context
 
-- Codex reads only `AGENTS.md` (32 KiB cap). Cursor reads `AGENTS.md` or `.cursor/rules`. Grok Build reads `AGENTS.md` **and** `CLAUDE.md`, loading every match.
+- Codex reads `AGENTS.override.md` / `AGENTS.md` plus any configured fallback filenames, not `CLAUDE.md` by default; the combined size default (`project_doc_max_bytes`) is 32 KiB and is configurable. Cursor reads `AGENTS.md` or `.cursor/rules`. Grok Build reads `AGENTS.md` **and** `CLAUDE.md`, loading every match.
 - Claude Code reads `AGENTS.md` only when there is no `CLAUDE.md`, but a `CLAUDE.md` that imports `@AGENTS.md` gets both.
-- OpenAI's harness post: a ~100-line `AGENTS.md` as a table of contents beats one giant manual. Claude's docs: keep `CLAUDE.md` under 200 lines.
+- OpenAI's harness post: a ~100-line `AGENTS.md` as a table of contents beats one giant manual. Claude's docs: keep `CLAUDE.md` under 200 lines. JDAD's single target: `AGENTS.md` at most 120 lines and under 32 KiB, enforced by `tests/test_docs.py`.
 
 ## Decision
 
