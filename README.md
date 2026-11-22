@@ -28,7 +28,7 @@ tests/
 
 - `sources/` is the archive. Each file belongs to one source and keeps what that source actually said, in its own words.
 - `practices/` is what agents should follow. Rules are merged, tagged, and each one cites its source. When two sources disagree, keep both and say so; do not silently drop one.
-- Tags: `[frontend]` `[backend]` `[db]` `[infra]` `[observability]` `[testing]`. Mark "applies when" on a rule so agents do not over-apply it.
+- Tags: `[frontend]` `[backend]` `[db]` `[infra]` `[observability]` `[testing]` `[security]` `[supply-chain]` `[ci]` `[process]` `[design]` `[ux]` (scopes in [docs/kb-schema.md](docs/kb-schema.md#tags)). Mark "applies when" on a rule so agents do not over-apply it.
 
 The official Python MCP SDK v2 renamed `FastMCP` to `MCPServer`. This server uses `MCPServer`.
 
@@ -76,7 +76,7 @@ The default HTTP bind is `127.0.0.1`. Binding to a non-loopback address (`0.0.0.
 | `get_checklist(tags[])` | One line per rule for the given tags, `- <id>: <text> (<citation>)`, ready to paste into a plan |
 | `kb_version` | Git SHA of the checkout and the date of the newest source entry |
 
-Tags for `search_practices` and `get_checklist`: `frontend`, `backend`, `db`, `infra`, `observability`, `testing`. An empty `tags` list on `get_checklist` returns every rule.
+Tags for `search_practices` and `get_checklist`: `frontend`, `backend`, `db`, `infra`, `observability`, `testing`, `security`, `supply-chain`, `ci`, `process`, `design`, `ux`. An empty `tags` list on `get_checklist` returns every rule.
 
 Practice files are also MCP resources at `kb://practices/<name>` (for example `kb://practices/performance`). The `apply-kb` prompt tells an agent to pull the relevant checklist before planning and to cite the rules in its PR. `/healthz` returns `{"status": "ok"}` and stays unauthenticated. The git SHA lives only on the auth-gated `kb_version` tool.
 

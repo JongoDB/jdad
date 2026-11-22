@@ -76,10 +76,11 @@ Goal: video or article → source → practice, with dedupe, tags and citations,
   - Deliverables: `jdad kb dupes` (offline token-overlap or TF-IDF similarity over rule text, stdlib only) listing candidate pairs above a threshold; a non-blocking report in `./verify` output.
   - Acceptance: a committed fixture file labels pairs as duplicate, paraphrase or distinct, and the PR records the cutoff θ; at θ, every exact-duplicate pair is reported, paraphrase recall ≥ 0.8, and no pair in the current KB labeled distinct is reported; the score output is in the PR.
   - Depends on: P1.2.
-- [ ] **P2.3 Tag taxonomy v2**
+- [x] **P2.3 Tag taxonomy v2**
   - Deliverables: add tags for `security`, `supply-chain`, `ci`, `process` (agent workflow), `design` (API and architecture), `ux`; document each in `docs/kb-schema.md`; `get_checklist` and the `/jdad` command accept them.
   - Acceptance: lint and `get_checklist` tests are parametrized over all six new tags; each tag returns its seeded rule ID and excludes rules with other tags; an unknown tag fails lint with the tag name in the error.
-  - Depends on: P1.2. **Needs Jon:** approve the tag list.
+  - Depends on: P1.2. **Needs Jon:** approve the tag list. Approved as is, 2026-11-22.
+  - Evidence (2026-11-22, JON-1347): `tests/test_tags.py` is parametrized over the six tags: each lints clean, and `get_checklist([tag])` on `tests/fixtures/tags/` returns exactly its seeded rule ID; five misspelled tags fail lint with the tag named; README, `/jdad`, the schema doc, CLAUDE.md and the server strings list all twelve.
 - [ ] **P2.4 Ingest the harness research as KB sources**
   - Goal: the agent-workflow opinions in VISION.md become cited KB rules, not just prose.
   - Deliverables: `sources/` records for OpenAI "Harness engineering", Anthropic's long-running harness and harness-design posts, and Claude Code best practices (see `docs/research/`); `practices/agentic-workflow.md` tagged `[process]`; `catalog/skills/jdad-workflow/`.

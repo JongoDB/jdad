@@ -63,7 +63,8 @@ def search_practices(
     Each hit has the rule `id`, `topic`, section `heading`, a short `snippet` and its `score`.
     `response_format="detailed"` adds the full `text`, `tags`, `citation`, `origin`,
     `applies_when` and `file`; use it only when you'll quote the rule. Optional `tags` filter:
-    frontend, backend, db, infra, observability, testing. `limit` is 1-50 (default 10).
+    frontend, backend, db, infra, observability, testing, security, supply-chain, ci, process, design, ux.
+    `limit` is 1-50 (default 10).
     `tag` is the older single-tag form of `tags`.
     """
     return _kb().search_practices(query, tag=tag, tags=tags, limit=limit, response_format=response_format)
@@ -102,7 +103,8 @@ def get_source(id: str) -> str:
 def get_checklist(tags: list[str]) -> str:
     """Return rules filtered by tags, one line each (`- <id>: <text> (<citation>)`), ready to paste into a plan.
 
-    Tags: frontend, backend, db, infra, observability, testing. An empty list returns every rule.
+    Tags: frontend, backend, db, infra, observability, testing, security, supply-chain, ci, process, design, ux.
+    An empty list returns every rule.
     """
     return _kb().get_checklist(tags)
 
@@ -128,7 +130,7 @@ def apply_kb(task: str = "", tags: str = "") -> str:
 
 Before you write a plan or start implementation:{tag_hint}
 1. Call list_topics to see available practice files and tags.
-2. Call get_checklist with the tags that apply to this work (frontend, backend, db, infra, observability, testing). If you are unsure which tags apply, call search_practices with keywords from the task.
+2. Call get_checklist with the tags that apply to this work (frontend, backend, db, infra, observability, testing, security, supply-chain, ci, process, design, ux). If you are unsure which tags apply, call search_practices with keywords from the task.
 3. Pull the relevant checklist into your plan. Do not invent rules that are not in the KB, and do not apply a rule whose tag does not fit the work.
 4. When you open a PR, cite the specific KB rules you followed (topic, heading, and the source noted on the rule).
 

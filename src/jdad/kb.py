@@ -22,7 +22,11 @@ PRACTICES_DIR = "practices"
 SOURCES_DIR = "sources"
 
 # The tags a practice section may carry (docs/kb-schema.md). P2.3 extends this.
-KNOWN_TAGS = ("frontend", "backend", "db", "infra", "observability", "testing")
+# docs/kb-schema.md describes each. P2.3 (Jon, 2026-11-22) added the last six.
+KNOWN_TAGS = (
+    "frontend", "backend", "db", "infra", "observability", "testing",
+    "security", "supply-chain", "ci", "process", "design", "ux",
+)
 RULE_ID_RE = re.compile(r"^[a-z][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$")
 _RULE_ID_SUFFIX_RE = re.compile(r"\s*\{#([^}]*)\}\s*$")
 _CITATION_SUFFIX_RE = re.compile(r"\s*\((src:[^()]*|KB addition)\)\s*$", re.IGNORECASE)

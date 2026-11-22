@@ -17,7 +17,7 @@ When Jon (or anyone) sends a video, article, or thread to mine:
    - The extractable practices as a numbered list, 1 to `items`, in short quotes or close paraphrase. A short list of tips may be listed as it appears; never paste a whole transcript or article (the repo is public).
 3. Fold the useful rules into `practices/<topic>.md`, or add a new topic file if none fits.
    - Deduplicate. If a rule already exists, add a source citation instead of repeating the bullet.
-   - Tag every section with one or more of: `[frontend]` `[backend]` `[db]` `[infra]` `[observability]` `[testing]`.
+   - Tag every section with one or more of: `[frontend]` `[backend]` `[db]` `[infra]` `[observability]` `[testing]` `[security]` `[supply-chain]` `[ci]` `[process]` `[design]` `[ux]` (scopes in `docs/kb-schema.md`).
    - Follow `docs/kb-schema.md`: one instruction per `- ` rule, ending with its citation `(src: <source> #n)` and a permanent ID `{#<prefix>.<area>.<slug>}`.
    - Cite the source on each rule, e.g. `(src: breakingbreach #8)`.
    - Add an "applies when" note when a rule is easy to over-apply.

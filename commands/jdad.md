@@ -10,7 +10,7 @@ Use the jdad MCP tools when they are available: `list_topics`, `search_practices
 ## `plan` — `/jdad plan [task]`
 
 1. Read the current task (the remainder of `$ARGUMENTS`, plus the conversation and repo).
-2. Call `list_topics`, then `get_checklist` with the tags that apply (`frontend`, `backend`, `db`, `infra`, `observability`, `testing`). If the tags are unclear, `search_practices` first.
+2. Call `list_topics`, then `get_checklist` with the tags that apply (`frontend`, `backend`, `db`, `infra`, `observability`, `testing`, `security`, `supply-chain`, `ci`, `process`, `design`, `ux`). If the tags are unclear, `search_practices` first.
 3. Write a short plan that includes the matching checklist. Do not invent rules that are not in the KB, and do not apply a rule whose tag does not fit.
 4. Call `kb_version` and mention the SHA and newest-entry date in the plan.
 
