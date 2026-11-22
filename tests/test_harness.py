@@ -1,0 +1,243 @@
+"""The harness this repo dogfoods (roadmap P1.6): deny rules, the PreToolUse
+guard, the Stop hook, `./verify --fast`, and LESSONS.md.
+
+Hooks are driven with the JSON Claude Code sends on stdin, so this needs no
+Claude Code install, login or network.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+GUARD = REPO_ROOT / ".claude" / "hooks" / "guard.py"
+STOP = REPO_ROOT / ".claude" / "hooks" / "stop_verify.py"
+SETTINGS = json.loads((REPO_ROOT / ".claude" / "settings.json").read_text())
+
+
+def run_hook(script: Path, event: dict | str, env: dict | None = None) -> subprocess.CompletedProcess:
+    data = event if isinstance(event, str) else json.dumps(event)
+    return subprocess.run(
+        [sys.executable, str(script)], input=data, capture_output=True, text=True, timeout=120, env=env, check=False
+    )
+
+
+def decision(event: dict) -> str:
+    result = run_hook(GUARD, event)
+    assert result.returncode == 0, result.stderr
+    if not result.stdout.strip():
+        return "allow"
+    out = json.loads(result.stdout)["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse"
+    assert out["permissionDecisionReason"]
+    return out["permissionDecision"]
+
+
+def bash(command: str) -> dict:
+    return {"hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": {"command": command}}
+
+
+def read(path: str, tool: str = "Read") -> dict:
+    return {"hook_event_name": "PreToolUse", "tool_name": tool, "tool_input": {"file_path": path}}
+
+
+# ---- settings.json -----------------------------------------------------------
+
+
+def test_settings_declare_the_deny_rules() -> None:
+    deny = set(SETTINGS["permissions"]["deny"])
+    for rule in (
+        "Read(**/.env*)",
+        "Read(**/*.pem)",
+        "Read(**/id_*)",
+        "Bash(rm -rf *)",
+        "Bash(git push --force*)",
+        "Bash(git push * --force*)",
+        "Bash(git push -f*)",
+    ):
+        assert rule in deny, rule
+    assert "allow" not in SETTINGS["permissions"], "this repo grants no blanket allows"
+
+
+def test_settings_hooks_point_at_executable_scripts() -> None:
+    hooks = SETTINGS["hooks"]
+    commands = [h["command"] for group in hooks["PreToolUse"] + hooks["Stop"] for h in group["hooks"]]
+    assert commands == ['"$CLAUDE_PROJECT_DIR"/.claude/hooks/guard.py', '"$CLAUDE_PROJECT_DIR"/.claude/hooks/stop_verify.py']
+    assert set(hooks["PreToolUse"][0]["matcher"].split("|")) >= {"Read", "Edit", "Write", "Grep", "Glob", "Bash"}
+    for script in (GUARD, STOP):
+        assert os.access(script, os.X_OK), f"{script.name} isn't executable"
+
+
+# ---- PreToolUse guard ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        read("README.md"),
+        read("/repo/src/jdad/server.py"),
+        read("deploy/jdad.env.example"),
+        bash("uv run pytest -q"),
+        bash("git push -u origin feat/dogfood-harness"),
+        bash("rm build/old.txt"),
+        bash("rm -r build"),
+        bash("python3 - <<'EOF'\nprint('docs mention .env and id_rsa')\nEOF"),
+        bash('git commit -q -m "deny reading .env*, *.pem and id_* files"'),
+        bash("git commit --message='mention x.pem'"),
+        bash('gh pr comment 1 --body "the guard denies .env reads" --title "id_rsa note"'),
+        bash('echo "never read .env"'),
+    ],
+    ids=["readme", "abs-src", "env-example-name", "pytest", "normal-push", "rm-file", "rm-r", "heredoc-body",
+         "commit-message", "commit-message-eq", "gh-body", "echo-text"],
+)
+def test_guard_allows(event: dict) -> None:
+    assert decision(event) == "allow"
+
+
+@pytest.mark.parametrize(
+    "event",
+    [
+        read(".env"),
+        read("/repo/src/jdad/.env.local"),
+        read("x.pem"),
+        read("deploy/tls/origin.pem"),
+        read("~/.ssh/id_ed25519"),
+        read("id_ed25519.pub"),
+        read(".env", tool="Edit"),
+        read("secrets/key.pem", tool="Write"),
+        {"tool_name": "Grep", "tool_input": {"pattern": "TOKEN", "path": ".env"}},
+        bash("cat .env"),
+        bash("source .env && ./run"),
+        bash("cp ~/.ssh/id_ed25519 /tmp/k"),
+        bash("rm -rf /tmp/x"),
+        bash("rm -fr build"),
+        bash("rm -r -f build"),
+        bash("rm --recursive --force build"),
+        bash("sudo rm -Rf /"),
+        bash("echo hi && rm -rf build"),
+        bash("sh -c 'rm -rf build'"),
+        bash("timeout 5 rm -rf build"),
+        bash("git push --force"),
+        bash("git push -f origin main"),
+        bash("git push origin main --force"),
+        bash("git push --force-with-lease origin feat/x"),
+        bash("git push origin +main"),
+        bash("git -C /repo push -f"),
+        bash("git add .env"),
+        bash("git show HEAD:.env"),
+        bash("echo TOKEN=x > .env"),
+        bash("printf x >> deploy/key.pem"),
+        bash('git commit -m "msg" -- id_ed25519'),
+    ],
+    ids=lambda e: (e["tool_input"].get("command") or e["tool_input"].get("file_path") or e["tool_name"])[:40],
+)
+def test_guard_denies_before_execution(event: dict) -> None:
+    assert decision(event) == "deny"
+
+
+def test_guard_denies_on_unparsable_input() -> None:
+    result = run_hook(GUARD, "not json")
+    assert result.returncode == 2 and "denying" in result.stderr
+
+
+# ---- Stop hook -------------------------------------------------------------
+
+
+def _fake_project(tmp_path: Path, passing: bool) -> Path:
+    project = tmp_path / ("pass" if passing else "fail")
+    (project / "tests").mkdir(parents=True)
+    (project / "tests" / "test_x.py").write_text(f"def test_x():\n    assert {passing}\n")
+    verify = project / "verify"
+    verify.write_text(f'#!/usr/bin/env bash\n[[ "$1" == --fast ]] || exit 9\nexec "{sys.executable}" -m pytest -q -p no:cacheprovider tests\n')
+    verify.chmod(0o755)
+    return project
+
+
+@pytest.mark.parametrize(("passing", "code"), [(True, 0), (False, 2)])
+def test_stop_hook_blocks_only_on_failure(tmp_path: Path, passing: bool, code: int) -> None:
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(_fake_project(tmp_path, passing))}
+    result = run_hook(STOP, {"hook_event_name": "Stop", "stop_hook_active": False}, env)
+    assert result.returncode == code, result.stderr
+    if not passing:
+        assert "./verify --fast failed" in result.stderr and "assert False" in result.stderr
+
+
+def test_stop_hook_never_loops(tmp_path: Path) -> None:
+    env = {**os.environ, "CLAUDE_PROJECT_DIR": str(_fake_project(tmp_path, passing=False))}
+    result = run_hook(STOP, {"hook_event_name": "Stop", "stop_hook_active": True}, env)
+    assert result.returncode == 0
+    assert "not blocking again" in result.stderr
+
+
+# ---- ./verify --fast --------------------------------------------------------
+
+
+@pytest.fixture
+def stub_verify(tmp_path: Path) -> tuple[Path, dict]:
+    """A copy of ./verify with a stub `uv` that fails ruff or pytest on demand."""
+    work = tmp_path / "repo"
+    work.mkdir()
+    shutil.copy2(REPO_ROOT / "verify", work / "verify")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "calls.log"
+    stub = bin_dir / "uv"
+    stub.write_text(
+        "#!/usr/bin/env bash\n"
+        f'echo "$*" >> "{log}"\n'
+        'case "$*" in\n'
+        '  *ruff*) exit "${FAIL_RUFF:-0}" ;;\n'
+        '  *pytest*) exit "${FAIL_PYTEST:-0}" ;;\n'
+        "  *) exit 97 ;;\n"
+        "esac\n"
+    )
+    stub.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+    return work, {"env": env, "log": log}
+
+
+def _fast(work: Path, env: dict, *args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["bash", str(work / "verify"), *args], capture_output=True, text=True, env=env, check=False)
+
+
+def test_verify_fast_runs_ruff_then_pytest(stub_verify) -> None:
+    work, ctx = stub_verify
+    result = _fast(work, ctx["env"], "--fast")
+    assert result.returncode == 0 and "verify --fast: ok" in result.stdout
+    calls = ctx["log"].read_text().splitlines()
+    assert [("ruff" in c, "pytest" in c) for c in calls] == [(True, False), (False, True)]
+
+
+@pytest.mark.parametrize("failing", ["FAIL_RUFF", "FAIL_PYTEST"])
+def test_verify_fast_fails_when_either_fails(stub_verify, failing: str) -> None:
+    work, ctx = stub_verify
+    result = _fast(work, {**ctx["env"], failing: "1"}, "--fast")
+    assert result.returncode != 0
+    assert "verify --fast: ok" not in result.stdout
+
+
+def test_verify_rejects_unknown_flags(stub_verify) -> None:
+    work, ctx = stub_verify
+    assert _fast(work, ctx["env"], "--fats").returncode == 2
+
+
+# ---- LESSONS.md ------------------------------------------------------------
+
+
+def test_lessons_have_dates_and_links() -> None:
+    text = (REPO_ROOT / "LESSONS.md").read_text()
+    entries = re.split(r"^## ", text, flags=re.MULTILINE)[1:]
+    assert len(entries) >= 5
+    for entry in entries:
+        heading = entry.splitlines()[0]
+        assert re.match(r"\d{4}-\d{2}-\d{2}: \S", heading), heading
+        assert re.search(r"^- Source: https://github\.com/JongoDB/jdad/(pull|issues)/\d+", entry, re.MULTILINE), heading
+        assert "- Rule:" in entry, heading

@@ -10,3 +10,4 @@
 - **R-cc-2** `/jdad add <url>` must not write an entry. It only tells the user to send the URL to Daisy.
 - **R-cc-3** The `/jdad` command lives in `commands/jdad.md`; don't split it into four command files.
 - **R-cc-4** `claude plugin validate .` must pass. `./verify` runs it when the `claude` CLI is on `PATH`.
+- **R-cc-5** `.claude/settings.json` enforces R-sec-2 and R-flow-8: deny rules, a `PreToolUse` hook (`.claude/hooks/guard.py`) that denies the same things before a tool runs, and a `Stop` hook (`.claude/hooks/stop_verify.py`) that runs `./verify --fast` and blocks finishing (exit 2) while it fails, once per stop. Don't loosen them; `tests/test_harness.py` covers both hooks. Per-user overrides go in the git-ignored `.claude/settings.local.json`.
