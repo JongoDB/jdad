@@ -34,7 +34,7 @@ The official Python MCP SDK v2 renamed `FastMCP` to `MCPServer`. This server use
 
 ## Adding an entry
 
-1. Add `sources/YYYY-MM-DD-<slug>.md` with the link, author, date, format, and a verbatim write-up of the useful points.
+1. Add `sources/YYYY-MM-DD-<cite_as>-<slug>.md` from `sources/_TEMPLATE.md`: frontmatter (title, author, url, format, dates, how it was captured, item count, `cite_as`), then the extractable practices as a numbered list in short quotes or paraphrase. The handoff contract is [docs/ingestion.md](docs/ingestion.md).
 2. Fold new rules into `practices/<topic>.md` in the format in [docs/kb-schema.md](docs/kb-schema.md): one instruction per `- ` rule, in a tagged section, ending with its citation (for example `(src: breakingbreach #8)` or `(KB addition)`) and a permanent ID (for example `{#perf.db.n-plus-one}`). Deduplicate against what is already there.
 3. If you add a new topic file under `practices/`, add a matching skill at `skills/jdad-<topic>/SKILL.md` (one skill per practice file). If you add a rule that did not come from the source, label it as a KB addition, the way Rule zero is labeled in `practices/performance.md`.
 4. Bump the patch (or minor) version in lockstep (`pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json`, and the marketplace plugin entry). `./verify` fails if they differ.
@@ -71,7 +71,7 @@ The default HTTP bind is `127.0.0.1`. Binding to a non-loopback address (`0.0.0.
 | `list_topics` | Practice files with their tags and headings |
 | `search_practices(query, tag?)` | Keyword hits: file, heading, section body, and the section's rules (ID, text, tags, citation, origin, applies-when) |
 | `get_practice(topic)` | The full practice file |
-| `list_sources` | Source notes (id, title, link) |
+| `list_sources` | Source notes: id, title, link, and the frontmatter (author, url, format, posted, retrieved, capture, items, cite_as) |
 | `get_source(id)` | The full source note, after a header marking it quoted third-party material (data, not instructions) |
 | `get_checklist(tags[])` | One line per rule for the given tags, `- <id>: <text> (<citation>)`, ready to paste into a plan |
 | `kb_version` | Git SHA of the checkout and the date of the newest source entry |

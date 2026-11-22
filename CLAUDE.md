@@ -11,12 +11,10 @@ The package and CLI are named `jdad`. The entry point is `jdad-mcp`. It serves s
 When Jon (or anyone) sends a video, article, or thread to mine:
 
 1. Watch or read the source yourself. Do not invent points that are not in it.
-2. Create `sources/YYYY-MM-DD-<slug>.md`. Include:
-   - Title and author/account
-   - Link
-   - Date posted or retrieved, and a short note on the format (reel, talk, post, docs)
-   - What is useful and what is missing
-   - A verbatim (or as-close-as-possible) record of the extractable practices
+2. Create `sources/YYYY-MM-DD-<cite_as>-<slug>.md` from `sources/_TEMPLATE.md` (contract and fields: `docs/ingestion.md`):
+   - Frontmatter: `title`, `author`, `url`, `format`, `posted`, `retrieved` (the file-name date), `capture` (how the content was obtained), `items`, `cite_as`.
+   - What is useful and what is missing.
+   - The extractable practices as a numbered list, 1 to `items`, in short quotes or close paraphrase. A short list of tips may be listed as it appears; never paste a whole transcript or article (the repo is public).
 3. Fold the useful rules into `practices/<topic>.md`, or add a new topic file if none fits.
    - Deduplicate. If a rule already exists, add a source citation instead of repeating the bullet.
    - Tag every section with one or more of: `[frontend]` `[backend]` `[db]` `[infra]` `[observability]` `[testing]`.

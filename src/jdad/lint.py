@@ -25,6 +25,13 @@ Structure checks (practices/*.md, docs/kb-schema.md):
 - ``rule-id``: a rule with no ``{#id}``, a malformed or duplicate ID, or an
   ID whose first segment differs from the rest of the file's.
 - ``citation``: a rule without ``(src: ...)`` or ``(KB addition)``.
+- ``source``: a source file (sources/*.md, not ``_``-prefixed) whose
+  frontmatter is missing, has a missing, empty or unknown field, a bad date,
+  a file-name date that differs from ``retrieved``, a non-positive ``items``,
+  a non-http(s) ``url``, or a malformed or duplicate ``cite_as``
+  (docs/ingestion.md).
+- ``citation`` also fails when ``(src: <name> #n)`` names no source's
+  ``cite_as``, or ``n`` is outside 1..``items``.
 - ``rule-format``: nested or numbered items, prose in a section, a rule
   before the first section, or a section with no rules. The parser keeps
   such text (it isn't dropped from checklists), but the KB must not rely on it.
@@ -55,7 +62,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from jdad.kb import KNOWN_TAGS, RULE_ID_RE, parse_practice
+from jdad.kb import (
+    KNOWN_TAGS,
+    RULE_ID_RE,
+    SOURCE_FIELDS,
+    parse_frontmatter,
+    parse_practice,
+)
 
 INSTRUCTION_DIRS = ("practices", "sources")
 ALL_DIRS = ("practices", "sources", "skills", "commands")
@@ -312,8 +325,87 @@ def lint_kb(root: Path) -> list[Finding]:
                 findings.append(
                     Finding(rel, 1, "file-type", f"only <name>.md files (lowercase extension, no dotfiles) belong in {name}/")
                 )
-    findings.extend(_structure_findings(root))
+    source_findings, sources = _source_findings(root)
+    findings.extend(source_findings)
+    findings.extend(_structure_findings(root, sources))
     return [f for f in findings if not config.allows(f)]
+
+
+_DATE_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
+_CITE_AS_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+_SRC_CITATION_RE = re.compile(r"^src:\s*([a-z0-9][a-z0-9-]*)\s+(#\d+(?:\s*,\s*#\d+)*)$")
+
+
+def _source_findings(root: Path) -> tuple[list[Finding], dict[str, tuple[str, int]]]:
+    """Frontmatter checks on sources/*.md. Returns findings and {cite_as: (path, items)}."""
+    findings: list[Finding] = []
+    index: dict[str, tuple[str, int]] = {}
+    base = root / "sources"
+    if not base.is_dir():
+        return findings, index
+    for path in sorted(base.glob("*.md")):
+        if path.name.startswith("_") or path.is_symlink() or not path.is_file():
+            continue
+        rel = path.relative_to(root).as_posix()
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            continue  # reported by the encoding check
+        first = text.split("\n", 1)[0]
+        meta, problems = parse_frontmatter(text)
+        for line, message in problems:
+            findings.append(Finding(rel, line, "source", message, first if line == 1 else ""))
+        if not meta and problems:
+            continue
+
+        def bad(message: str, rel: str = rel, first: str = first) -> None:
+            findings.append(Finding(rel, 1, "source", message, first))
+
+        for key in SOURCE_FIELDS:
+            if not meta.get(key, "").strip():
+                bad(f"frontmatter field '{key}' is missing or empty")
+        for key in sorted(set(meta) - set(SOURCE_FIELDS)):
+            bad(f"unknown frontmatter field '{key}' (allowed: {', '.join(SOURCE_FIELDS)})")
+        retrieved = meta.get("retrieved", "")
+        if retrieved and not _DATE_RE.match(retrieved):
+            bad(f"retrieved '{retrieved}' is not a YYYY-MM-DD date")
+        posted = meta.get("posted", "")
+        if posted and posted != "unknown" and not _DATE_RE.match(posted):
+            bad(f"posted '{posted}' is not a YYYY-MM-DD date or 'unknown'")
+        name_date = path.name[:10]
+        if retrieved and _DATE_RE.match(retrieved) and name_date != retrieved:
+            bad(f"file name date {name_date} differs from retrieved {retrieved}")
+        url = meta.get("url", "")
+        if url and not re.match(r"^https?://[^\s/]+", url):
+            bad(f"url '{url}' is not an http(s) URL")
+        items_text = meta.get("items", "")
+        items = int(items_text) if items_text.isdigit() else 0
+        if items_text and items < 1:
+            bad(f"items '{items_text}' is not a positive integer")
+        cite_as = meta.get("cite_as", "")
+        if cite_as:
+            if not _CITE_AS_RE.match(cite_as):
+                bad(f"cite_as '{cite_as}' must be lowercase letters, digits and hyphens")
+            elif cite_as in index:
+                bad(f"cite_as '{cite_as}' is already used by {index[cite_as][0]}")
+            else:
+                index[cite_as] = (rel, items)
+    return findings, index
+
+
+def _citation_problem(citation: str, sources: dict[str, tuple[str, int]]) -> str | None:
+    match = _SRC_CITATION_RE.match(citation)
+    if not match:
+        return f"citation '({citation})' isn't '(src: <cite_as> #n[, #m])'"
+    name, numbers = match.group(1), [int(n) for n in re.findall(r"\d+", match.group(2))]
+    if name not in sources:
+        known = ", ".join(sorted(sources)) or "none"
+        return f"citation names source '{name}', but no source has cite_as '{name}' (known: {known})"
+    path, items = sources[name]
+    out_of_range = [n for n in numbers if not 1 <= n <= items]
+    if out_of_range:
+        return f"citation item(s) {', '.join(f'#{n}' for n in out_of_range)} outside 1..{items} for {path}"
+    return None
 
 
 def _assembled_rule_findings(rel: str, rule) -> list[Finding]:
@@ -335,7 +427,7 @@ def _assembled_rule_findings(rel: str, rule) -> list[Finding]:
     return found
 
 
-def _structure_findings(root: Path) -> list[Finding]:
+def _structure_findings(root: Path, sources: dict[str, tuple[str, int]] | None = None) -> list[Finding]:
     """Rule-format checks over every top-level practices/*.md (docs/kb-schema.md)."""
     findings: list[Finding] = []
     seen_ids: dict[str, str] = {}
@@ -378,6 +470,10 @@ def _structure_findings(root: Path) -> list[Finding]:
                     findings.append(
                         Finding(rel, rule.line, "citation", "rule has no citation: end it with (src: <source> #n) or (KB addition)", text)
                     )
+                elif rule.origin == "source" and sources is not None:
+                    problem = _citation_problem(rule.citation, sources)
+                    if problem:
+                        findings.append(Finding(rel, rule.line, "citation", problem, text))
                 if not rule.id:
                     findings.append(Finding(rel, rule.line, "rule-id", "rule has no {#id}", text))
                     continue

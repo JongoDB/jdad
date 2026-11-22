@@ -1,3 +1,14 @@
+---
+title: "@breakingbreach: 31 app-performance fixes for a vibe-coded app"
+author: "@breakingbreach"
+url: https://www.instagram.com/reel/DfMYnLZyQOE/
+format: reel
+posted: 2026-11-01
+retrieved: 2026-11-22
+capture: on-screen list transcribed by hand from the reel (no narration; transcript tool not recorded)
+items: 31
+cite_as: breakingbreach
+---
 # @breakingbreach: 31 app-performance fixes for a vibe-coded app
 - Link: https://www.instagram.com/reel/DfMYnLZyQOE/ (posted 2026-11-01, ~1:25)
 - Format: an animated list, no narration except the hook ("Claude! I don't want my vibe-coded app to feel slow and lose users, so please...") and a "comment APP" CTA. No Claude Code commands shown.

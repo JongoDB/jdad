@@ -12,7 +12,7 @@ from jdad.kb import KnowledgeBase, parse_practice
 from jdad.lint import lint_kb
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-STRUCTURE_CHECKS = {"tag", "rule-id", "citation", "rule-format"}
+STRUCTURE_CHECKS = {"tag", "rule-id", "citation", "rule-format", "source"}
 
 GOOD = """# Good
 Intro prose is fine here.
@@ -26,9 +26,26 @@ Intro prose is fine here.
 """
 
 
+SOURCE_X = """---
+title: "X"
+author: "@x"
+url: https://example.com/x
+format: post
+posted: 2026-01-01
+retrieved: 2026-01-02
+capture: read the page
+items: 10
+cite_as: x
+---
+# X
+"""
+
+
 def make_kb(root: Path, files: dict[str, str | bytes]) -> Path:
     (root / "practices").mkdir(parents=True, exist_ok=True)
     (root / "sources").mkdir(exist_ok=True)
+    # A source the fixtures' "(src: x #n)" citations resolve to (items 1..10).
+    (root / "sources" / "2026-01-02-x.md").write_text(SOURCE_X)
     for rel, content in files.items():
         path = root / rel
         if isinstance(content, bytes):

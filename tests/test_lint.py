@@ -36,7 +36,7 @@ def make_kb(root: Path, files: dict[str, str | bytes]) -> Path:
     return root
 
 
-STRUCTURE_CHECKS = {"tag", "rule-id", "citation", "rule-format"}
+STRUCTURE_CHECKS = {"tag", "rule-id", "citation", "rule-format", "source"}
 
 
 def checks(root: Path) -> list[tuple[str, str, int]]:
