@@ -54,11 +54,9 @@ def test_unknown_and_traversal_are_rejected() -> None:
 def test_source_round_trip() -> None:
     kb = KnowledgeBase(REPO_ROOT)
     sources = kb.list_sources()
-    assert sources
-    source_id = sources[0]["id"]
+    source_id = next(s["id"] for s in sources if "breakingbreach" in s["id"])
     text = kb.get_source(source_id)
     assert "31 items" in text or "Skeleton" in text
-    assert "breakingbreach" in source_id
 
 
 def test_version_includes_sha_and_newest_entry() -> None:
