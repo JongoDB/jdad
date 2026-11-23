@@ -506,6 +506,8 @@ BATCH10_DENY = [
     # automated security review of df60e75: code-running wrappers
     "watch -d 'rm -rf x'",  # -d's value is optional, so the code isn't its value
     "watch -d -n 5 'git push --force'",
+    "watch 'rm -rf x' ok",  # code that isn't the last operand (Checker 12B mutant W5)
+    "watch -n 1 'git push --force' foo",
     "flock /tmp/l -c'rm -rf x'",  # attached
     "flock -o /tmp/l -oc 'rm -rf x'",  # in a cluster
     "flock /tmp/l --comm 'rm -rf x'",  # abbreviated
@@ -549,6 +551,9 @@ def test_batch10_bypasses_are_denied(command: str) -> None:
         bash("flock /tmp/l uv run pytest"),
         bash("flock /tmp/l -c 'uv run pytest -q'"),
         bash("watch -d -n 5 'uv run pytest -q'"),
+        # echo drops -n/-e/-E before its text is checked as code (Checker 12B mutant N13)
+        bash("echo -n 'ls' | sh"),
+        bash("echo -n 'git status' | bash"),
         bash("echo $(echo hello)"),
         bash("git log --oneline | head -5"),
         bash("rm --recursive build"),
