@@ -10,18 +10,29 @@ It repeats the deny rules in .claude/settings.json on purpose: those match
 command text, while this scans the command with a small quote-aware
 scanner (command substitutions, heredocs, compound commands, `sh -c`,
 `eval`, `find -exec`, wrappers) and fails closed when it can't tell (an
-unclosed substitution, nesting too deep). It also sees through leading
-VAR=value assignments, ( ) subshells, { } groups, if/for/while/case
-bodies and wrapper options that take a value (sudo -u USER).
+unclosed substitution, nesting too deep, out of time). It also sees
+through leading VAR=value assignments (their values are checked too),
+( ) subshells, { } groups, if/for/while/case bodies, wrapper options
+that take a value (sudo -u USER), backslash-newline continuations, GNU
+long-option prefixes (rm --rec --forc), variables the command itself
+assigns or defaults ("F=-rf; rm $F", "rm ${F:--rf}"), and code a shell
+reads from stdin: a here-string, a heredoc, or echo/printf piped in
+(redirections count anywhere in the command, with fd prefixes, and
+- or /dev/stdin as the script). A shell fed from any other pipe, a file
+or a descriptor is denied (its code can't be seen), and so is printf or
+echo text with escapes or a format that's run as code (the guard
+doesn't decode it). Every value a variable is given counts, and
+${NAME+word} on a variable the command doesn't set may be word. Secret
+names are matched case-insensitively (.ENV is .env on macOS).
 
 It is not a sandbox, and it does NOT catch (tested as known gaps):
-- a command name held in a variable (X=rm; $X -rf build) or an eval of a
-  variable's contents;
 - code that never appears as shell text: interpreters (python -c
-  "shutil.rmtree(...)"), decoded payloads (base64 -d | sh), a script
-  written and then run, aliases;
+  "shutil.rmtree(...)"), a script file written and then run (bash s.sh),
+  a variable set from a file or a command (X=$(cat f)), aliases;
 - other destructive commands outside the deny list (find -delete, git
-  reset --hard, git clean -fdx);
+  reset --hard, git clean -fdx, branch deletion with git push origin
+  :main, --delete or -d);
+- secret files outside the list above (*.key, *.p12, credentials.json);
 - Grep or Glob over a whole directory that contains secret files.
 Reads the hook's stdin JSON
 (tool_name, tool_input); to deny, prints hookSpecificOutput with
@@ -55,7 +66,11 @@ SPLIT_CHARS = OPERATOR_CHARS + "()"
 KEYWORDS = {"if", "then", "elif", "else", "fi", "do", "done", "while", "until", "for", "select",
             "case", "esac", "in", "function", "{", "}", "!", "coproc"}
 ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=.*", re.DOTALL)
-WRAPPERS = {"sudo", "env", "command", "builtin", "nohup", "nice", "time", "timeout", "stdbuf", "xargs", "exec"}
+WRAPPERS = {"sudo", "env", "command", "builtin", "nohup", "nice", "time", "timeout", "stdbuf", "xargs", "exec",
+            "doas", "setsid", "ionice", "chrt", "flock", "watch", "unbuffer", "busybox"}
+# Wrappers that take shell code as an argument: watch joins its operands and
+# runs them with sh -c; flock runs the value of -c/--command with sh -c.
+CODE_WRAPPERS = {"watch", "flock"}
 # Wrapper options that take a separate value ("sudo -u USER cmd"): skip both words.
 WRAPPER_VALUE_OPTIONS = {
     "sudo": {"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T", "--user", "--group", "--chdir", "--host", "--prompt"},
@@ -63,10 +78,18 @@ WRAPPER_VALUE_OPTIONS = {
     "nice": {"-n", "--adjustment"},
     "timeout": {"-s", "-k", "--signal", "--kill-after"},
     "stdbuf": {"-i", "-o", "-e"},
+    "doas": {"-u", "-C"},
+    "ionice": {"-c", "-n", "-p", "-P", "-u", "--class", "--classdata", "--pid", "--pgid", "--uid"},
+    "flock": {"-w", "-E", "--timeout", "--conflict-exit-code"},
+    "watch": {"-n", "-d", "-q", "--interval", "--differences", "--equexit"},
     # Not -i, -l, -e: their (optional) value is always attached ("-i{}").
     "xargs": {"-I", "-J", "-R", "-S", "-n", "-P", "-L", "-s", "-d", "-E", "-a", "--max-args", "--max-procs", "--delimiter", "--arg-file"},
 }
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
+# Builtins that set variables from NAME=value arguments.
+DECLARERS = {"export", "local", "declare", "typeset", "readonly"}
+# $NAME, ${NAME}, ${NAME:-default} and the other ${NAME<op>word} forms.
+VARIABLE_RE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?[-=+?])([^}]*))?\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 # Programs that only print names: a glob argument to them reads nothing.
 LISTERS = {"ls", "find", "echo", "printf", "stat", "du", "tree"}
 FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fprintf", "-fls"}
@@ -81,6 +104,9 @@ TIME_BUDGET_SECONDS = 5  # the hook denies if analysis takes longer (a timeout w
 # these markers so only unquoted ones count as globs.
 QUOTED_GLOB = {"*": "\x01", "?": "\x02", "[": "\x03"}
 _RESTORE = str.maketrans({v: k for k, v in QUOTED_GLOB.items()})
+# The "&" in a redirection (2>&1, <&3, &>file) isn't the background operator;
+# scan() swaps it for this marker so the splitter keeps the word whole.
+REDIRECT_AMP = "\x04"
 
 
 def restore(text: str) -> str:
@@ -88,6 +114,12 @@ def restore(text: str) -> str:
 
 
 REDIRECTS = (">", ">>", "<", "1>", "2>", "&>", ">|")
+# A redirection word: optional fd, operator, and (attached) target. A bare
+# operator takes the next word as its target.
+REDIRECT_WORD_RE = re.compile(r"(\d*)(<<<|<<-|<<|<>|<&|>&|&>>|&>|>>|>\||<|>)(.*)", re.DOTALL)
+# Operands that make a shell read its script from stdin.
+STDIN_OPERANDS = {"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"}
+MAX_VARIANTS = 8  # expansions of one word checked at most
 WORD_START = " \t\n;|&("
 
 
@@ -167,17 +199,21 @@ def _body_substitutions(body: str) -> list[str]:
     return inner
 
 
-def scan(command: str) -> tuple[str, list[str]]:
-    """Return (command with heredoc bodies removed, inner commands to check).
+def scan(command: str) -> tuple[str, list[str], list[str]]:
+    """Return (command with heredoc bodies removed, inner commands to check,
+    heredoc bodies).
 
     Inner commands are every $(...), <(...), >(...) and `...` the shell
     would run: outside single quotes, unescaped, including inside unquoted
     heredoc bodies. A heredoc body with a quoted delimiter (<<'EOF') is
     literal data and is skipped. A backslash escapes only outside single
-    quotes.
+    quotes. A backslash-newline outside single quotes is removed, as bash
+    joins the lines ("rm \\" + newline + "-rf x" is "rm -rf x"). Heredoc
+    bodies are returned too: a shell reading its code from stdin runs them.
     """
     out: list[str] = []
     inner: list[str] = []
+    bodies: list[str] = []
     i, quote, n = 0, None, len(command)
     while i < n:
         c = command[i]
@@ -185,6 +221,8 @@ def scan(command: str) -> tuple[str, list[str]]:
             out.append(QUOTED_GLOB.get(c, c))
             quote = None if c == "'" else quote
             i += 1
+        elif c == "\\" and command.startswith("\n", i + 1):
+            i += 2  # line continuation: the shell joins the lines
         elif c == "\\":
             out.append(command[i:i + 2])
             i += 2
@@ -222,17 +260,23 @@ def scan(command: str) -> tuple[str, list[str]]:
             inner.extend(_body_substitutions(command[i + 2:end]))
             out.append(command[i:end + 1])
             i = end + 1
+        elif c in "<>" and command.startswith("&", i + 1):
+            out.append(c + REDIRECT_AMP)
+            i += 2
+        elif c == "&" and command.startswith(">", i + 1):
+            out.append(REDIRECT_AMP + ">")
+            i += 2
         elif command.startswith("<<<", i):
             out.append("<<<")
             i += 3
         elif command.startswith("<<", i):
-            i = _heredoc(command, i, out, inner)
+            i = _heredoc(command, i, out, inner, bodies)
         else:
             out.append(c)
             i += 1
     if quote is not None:
         raise Unclear("unclosed quote")
-    return "".join(out), inner
+    return "".join(out), inner, bodies
 
 
 def _delimiter(command: str, i: int) -> tuple[str, bool, int]:
@@ -270,7 +314,7 @@ def _delimiter(command: str, i: int) -> tuple[str, bool, int]:
     return "".join(word), quoted, i
 
 
-def _heredoc(command: str, i: int, out: list[str], inner: list[str]) -> int:
+def _heredoc(command: str, i: int, out: list[str], inner: list[str], bodies: list[str]) -> int:
     start = i + 2
     dash = command.startswith("-", start)
     start += 1 if dash else 0
@@ -282,9 +326,10 @@ def _heredoc(command: str, i: int, out: list[str], inner: list[str]) -> int:
     if line_end < 0:
         return word_end
     # The rest of the opening line is ordinary shell text.
-    rest_out, rest_inner = scan(command[word_end:line_end])
+    rest_out, rest_inner, rest_bodies = scan(command[word_end:line_end])
     out.append(rest_out + "\n")
     inner.extend(rest_inner)
+    bodies.extend(rest_bodies)
     strip = "\t" if dash else ""
     body_lines, j, n = [], line_end + 1, len(command)
     while j < n:
@@ -298,6 +343,7 @@ def _heredoc(command: str, i: int, out: list[str], inner: list[str]) -> int:
         j = k + 1
     else:
         raise Unclear("heredoc never closed")
+    bodies.append("\n".join(body_lines))
     if not quoted:  # the body expands: $(...) and `...` run
         inner.extend(_body_substitutions("\n".join(body_lines)))
     return j
@@ -314,6 +360,7 @@ def _commands(command: str) -> list[tuple[list[str], bool]]:
         tokens = list(lex)
     except ValueError as exc:
         raise Unclear(f"can't split the command ({exc})") from None
+    tokens = [token.replace(REDIRECT_AMP, "&") for token in tokens]
     commands: list[tuple[list[str], bool]] = []
     current: list[str] = []
     for token in tokens:
@@ -332,7 +379,8 @@ def _commands(command: str) -> list[tuple[list[str], bool]]:
 
 
 def secret_name(value: str) -> str | None:
-    name = PurePath(value.strip().strip("'\"")).name
+    # Lower-cased: on a case-insensitive file system (macOS, Windows) .ENV is .env.
+    name = PurePath(value.strip().strip("'\"")).name.lower()
     for pattern in SECRET_GLOBS:
         if name and fnmatch.fnmatchcase(name, pattern):
             return pattern
@@ -382,13 +430,17 @@ def _realistic_secret(name: str) -> bool:
 
 def _skip_prefix(words: list[str]) -> list[str]:
     """Drop shell keywords and braces (if, do, {, !), "function NAME {" and
-    "coproc NAME {", and VAR=value assignments. Shared by every caller so
+    "coproc NAME {", VAR=value assignments and leading redirections. Shared by every caller so
     the parses can't drift apart."""
     while words:
+        redirect = REDIRECT_WORD_RE.fullmatch(words[0])
         if words[0] in ("function", "coproc") and len(words) > 2 and words[2] in ("{", "("):
             words = words[2:]
         elif words[0] in KEYWORDS or ASSIGNMENT_RE.fullmatch(words[0]):
             words = words[1:]
+        elif redirect:
+            # ">/dev/null rm -rf x": a redirection may come before the program.
+            words = words[1:] if redirect.group(3) else words[2:]
         else:
             break
     return words
@@ -425,9 +477,10 @@ def _rm_reason(args: list[str]) -> str | None:
     for arg in args:
         if arg == "--":
             break
-        if arg == "--recursive":
+        # GNU getopt accepts any unambiguous prefix: --rec, --forc, even --r and --f.
+        if len(arg) > 2 and "--recursive".startswith(arg):
             recursive = True
-        elif arg == "--force":
+        elif len(arg) > 2 and "--force".startswith(arg):
             force = True
         elif arg.startswith("-") and not arg.startswith("--"):
             recursive |= "r" in arg or "R" in arg
@@ -446,8 +499,210 @@ def _push_reason(args: list[str]) -> str | None:
     return None
 
 
-def _scanned_words(program: str, words: list[str]) -> list[str]:
-    """Words that could name a file (message text is left out)."""
+def _reference_values(match: re.Match, variables: dict[str, list[str]]) -> list[str]:
+    """What one $NAME / ${NAME<op>word} can expand to. Every value the command
+    gives the variable counts (order isn't tracked). For a variable the
+    command doesn't set, the environment may set it: ${NAME+word} may be
+    word, and ${NAME:-word} is word when it's unset."""
+    name = match.group(1) or match.group(4)
+    op, word = match.group(2), match.group(3) or ""
+    values = variables.get(name)
+    if op in ("-", ":-", "=", ":="):
+        return [v or word for v in values] if values else [word]
+    if op in ("+", ":+"):
+        return [word] if values else ["", word]
+    return list(values) if values else [match.group(0)]
+
+
+def _expand(word: str, variables: dict[str, list[str]]) -> list[str]:
+    """Every expansion of a word (at most MAX_VARIANTS)."""
+    variants, pos = [""], 0
+    for match in VARIABLE_RE.finditer(word):
+        literal = word[pos:match.start()]
+        options = _reference_values(match, variables)
+        variants = [v + literal + o for v in variants for o in options][:MAX_VARIANTS]
+        pos = match.end()
+    out: list[str] = []
+    for variant in variants:
+        if variant + word[pos:] not in out:
+            out.append(variant + word[pos:])
+    return out
+
+
+def _expand_words(words: list[str], variables: dict[str, list[str]]) -> list[str]:
+    """Expand each word. Only a word that is nothing but one variable
+    reference ("$FLAGS", "${F:--rf}") is split into several words, as the
+    shell splits an unquoted expansion; any other word stays one word, so
+    message text after -m or --body is still skipped as a whole. When a
+    word has several possible expansions, all of them are kept."""
+    out: list[str] = []
+    for word in words:
+        variants = _expand(word, variables)
+        if variants == [word]:
+            out.append(word)
+        elif VARIABLE_RE.fullmatch(word):
+            for variant in variants:
+                out.extend(variant.split())
+        else:
+            out.extend(variants)
+    return out
+
+
+def _assignments(words: list[str]) -> list[tuple[str, str]]:
+    """NAME=value pairs a simple command sets: leading assignments, and the
+    arguments of export/local/declare/typeset/readonly."""
+    words = [restore(w) for w in words]
+    pairs: list[tuple[str, str]] = []
+    i = 0
+    while i < len(words) and words[i] in KEYWORDS:
+        i += 1
+    while i < len(words) and ASSIGNMENT_RE.fullmatch(words[i]):
+        name, value = words[i].split("=", 1)
+        pairs.append((name.rstrip("+").split("[")[0], value))
+        i += 1
+    if i < len(words) and words[i] in DECLARERS:
+        for word in words[i + 1:]:
+            if ASSIGNMENT_RE.fullmatch(word):
+                name, value = word.split("=", 1)
+                pairs.append((name.rstrip("+").split("[")[0], value))
+    return pairs
+
+
+def _printed_texts(words: list[str], variables: dict[str, list[str]]) -> list[str] | None:
+    """What an echo/printf command prints (joined both ways, since printf
+    puts each argument on its own line with '%s\\n'); None for any other
+    program."""
+    words = _strip_wrappers(_expand_words([restore(w) for w in words], variables))
+    if not words or PurePath(words[0]).name not in TEXT_PROGRAMS:
+        return None
+    args = words[1:]
+    if PurePath(words[0]).name == "echo":
+        while args and re.fullmatch(r"-[neE]+", args[0]):
+            args = args[1:]
+    # printf formats and backslash escapes (printf, echo -e, zsh's echo) can
+    # print something other than their text: "printf 'r\\x6d'" prints "rm".
+    if any("\\" in a for a in args) or (PurePath(words[0]).name == "printf" and any("%" in a for a in args)):
+        raise Unclear("printf/echo text with escapes or a format, run as code")
+    return [" ".join(args), "\n".join(args)]
+
+
+def _as_code(text: str, variables: dict[str, list[str]]) -> list[str]:
+    """Shell code plus what echo/printf print inside its substitutions:
+    'bash -c "$(printf 'rm -rf x')"' runs the printed text."""
+    texts = [text]
+    try:
+        _, inner, _ = scan(text)
+    except Unclear:
+        return texts  # bash_reason(text) reports it
+    for sub in inner:
+        try:
+            commands = _commands(scan(sub)[0])
+        except Unclear:
+            continue  # bash_reason(text) reports it
+        for words, _piped in commands:
+            texts.extend(_printed_texts(words, variables) or [])  # Unclear propagates: deny
+    return texts
+
+
+def _wrapper_code(wrapper: str, args: list[str]) -> list[str]:
+    """Shell code a code-running wrapper passes to sh -c."""
+    if wrapper == "flock":
+        for index, arg in enumerate(args):
+            if arg in ("-c", "--command") and index + 1 < len(args):
+                return [args[index + 1]]
+            if arg.startswith("--command="):
+                return [arg.split("=", 1)[1]]
+        return []
+    takes_value = WRAPPER_VALUE_OPTIONS.get(wrapper, set())
+    while args and args[0].startswith("-"):
+        if args[0] == "--":
+            args = args[1:]
+            break
+        args = args[2:] if args[0] in takes_value else args[1:]
+    return [" ".join(args)] if args else []
+
+
+def _stdin_code(words: list[str], producer: list[str] | None, bodies: list[str],
+                variables: dict[str, list[str]]) -> tuple[list[str], str | None]:
+    """If this command runs a shell that reads its code from stdin, return
+    (code it reads, reason to deny when that code can't be seen).
+    Redirections count wherever they are ("<<<'x' bash", "bash 0<<<'x'")."""
+    words = _expand_words([restore(w) for w in words], variables)
+    rest: list[str] = []
+    herestrings: list[str] = []
+    heredoc = from_file = False
+    k = 0
+    while k < len(words):
+        match = REDIRECT_WORD_RE.fullmatch(words[k])
+        if not match:
+            rest.append(words[k])
+            k += 1
+            continue
+        fd, op, target = match.groups()
+        if not target and op not in ("<<", "<<-"):
+            target = words[k + 1] if k + 1 < len(words) else ""
+            k += 1
+        k += 1
+        if fd not in ("", "0") or op.startswith((">", "&")):
+            continue  # an output or another descriptor
+        if op == "<<<":
+            herestrings.append(target)
+        elif op in ("<<", "<<-"):
+            heredoc = True
+        else:
+            from_file = True  # <, <> or <&: a file or descriptor the guard can't see
+    rest = _strip_wrappers(rest)
+    if not rest or PurePath(rest[0]).name not in SHELLS:
+        return [], None
+    operand = reads_stdin = False
+    args, k = rest[1:], 0
+    while k < len(args):
+        arg = args[k]
+        if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg):
+            return [], None  # sh -c CODE: checked by _nested_commands
+        if arg in ("-o", "+o", "-O", "+O"):
+            k += 2
+            continue
+        if arg in STDIN_OPERANDS or arg == "-s":
+            reads_stdin = True
+        elif not arg.startswith(("-", "+")):
+            operand = True  # a script file: a known gap (its text isn't visible)
+        k += 1
+    if operand and not reads_stdin:
+        return [], None
+    codes = list(herestrings) + (list(bodies) if heredoc else [])
+    if producer is not None:
+        printed = _printed_texts(producer, variables)
+        if printed is None:
+            return codes, "a shell reads code from a pipe the guard can't see"
+        codes.extend(printed)
+    if from_file:
+        return codes, "a shell reads code from a file or descriptor the guard can't see"
+    return codes, None
+
+
+def _token_reason(raw_word: str, lister: bool, redirect: bool) -> str | None:
+    for candidate in _expand_braces(raw_word):
+        for raw_token in re.split(r"[<>=:]", candidate):
+            if not raw_token:
+                continue
+            globbing = any(c in raw_token for c in "*?[")  # unquoted only
+            token = restore(raw_token)
+            if lister and not redirect and any(c in token for c in "*?["):
+                continue  # a pattern argument to ls/find/echo lists names only
+            pattern = secret_name(token)
+            if pattern:
+                return f"touches a secret-shaped file ({pattern}): {token}"
+            if globbing and glob_could_match_secret(token):
+                return f"glob {token} could match a secret-shaped file"
+    return None
+
+
+def _scanned_words(program: str, words: list[str], consumed: bool = False) -> list[str]:
+    """Words that could name a file (message text is left out). What
+    echo/printf print inside $(...) feeds another command, so it counts."""
+    if program in TEXT_PROGRAMS and consumed:
+        return words[1:]
     if program in TEXT_PROGRAMS:
         redirects = (">", ">>", "<", "1>", "2>", "&>")
         return [w for prev, w in zip([""] + words, words, strict=False) if prev in redirects or any(c in w for c in "<>")]
@@ -463,16 +718,17 @@ def _scanned_words(program: str, words: list[str]) -> list[str]:
     return out
 
 
-def _nested_commands(program: str, args: list[str]) -> list[str]:
+def _nested_commands(program: str, args: list[str], variables: dict[str, list[str]]) -> list[str]:
     nested: list[str] = []
     if program in SHELLS:
         for index, arg in enumerate(args):
             if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg):  # -c, -lc, -ec, ...
                 rest = [a for a in args[index + 1:] if not a.startswith("-")]
-                nested.extend(rest[:1])
+                for code in rest[:1]:
+                    nested.extend(_as_code(code, variables))
                 break
     elif program == "eval":
-        nested.append(" ".join(args))
+        nested.extend(_as_code(" ".join(args), variables))
     elif program == "find":
         for index, arg in enumerate(args):
             if arg in ("-exec", "-execdir", "-ok", "-okdir"):
@@ -494,9 +750,34 @@ def _after_first_wrapper(words: list[str]) -> list[str] | None:
     return None
 
 
-def _simple_reason(raw_words: list[str], depth: int, piped: bool = False, scan_tail: bool = True) -> str | None:
+def _simple_reason(raw_words: list[str], depth: int, piped: bool = False, scan_tail: bool = True,
+                   consumed: bool = False, variables: dict[str, list[str]] | None = None) -> str | None:
+    try:
+        return _simple_reason_inner(raw_words, depth, piped, scan_tail, consumed, variables or {})
+    except Unclear as exc:
+        return f"can't check this command safely ({exc})"
+
+
+def _simple_reason_inner(raw_words: list[str], depth: int, piped: bool, scan_tail: bool,
+                         consumed: bool, variables: dict[str, list[str]]) -> str | None:
     if len(raw_words) > MAX_WORDS:
         return f"command too long to check ({len(raw_words)} words, limit {MAX_WORDS})"
+    # An assignment's value can name a secret ("f=.env; cat $f"): check it here,
+    # since the prefix is skipped below.
+    for _name, value in _assignments(raw_words):
+        for variant in _expand(value, variables):
+            reason = _token_reason(variant, lister=False, redirect=False)
+            if reason:
+                return reason
+    # Flags or the program held in a variable the command set ("F=-rf; rm $F").
+    raw_words = _expand_words(raw_words, variables)
+    head = _skip_prefix([restore(w) for w in raw_words])
+    if head and PurePath(head[0]).name in CODE_WRAPPERS:
+        for code in _wrapper_code(PurePath(head[0]).name, head[1:]):
+            for text in _as_code(code, variables):
+                reason = bash_reason(text, depth + 1, consumed=piped, variables=variables)
+                if reason:
+                    return reason
     # Wrapper options vary by tool and platform (attached values, clusters,
     # durations), so rather than trust one parse, check every later word
     # position as a possible program: "sudo -uroot rm -rf x" finds "rm -rf x".
@@ -510,7 +791,7 @@ def _simple_reason(raw_words: list[str], depth: int, piped: bool = False, scan_t
         for i in range(len(tail)):
             if restore(tail[i]).startswith("-"):
                 continue  # an option, not a program
-            reason = _simple_reason(tail[i:], depth + 1, piped, scan_tail=False)
+            reason = _simple_reason(tail[i:], depth + 1, piped, scan_tail=False, consumed=consumed, variables=variables)
             if reason:
                 return reason
     raw_words = _strip_wrappers([restore(w) for w in raw_words[:1]] + raw_words[1:])
@@ -521,10 +802,10 @@ def _simple_reason(raw_words: list[str], depth: int, piped: bool = False, scan_t
         return f"can't tell which program runs (an option, {words[0]!r}, is left where the program should be)"
     program = PurePath(words[0]).name
     args = words[1:]
-    for inner in _nested_commands(program, args):
+    for inner in _nested_commands(program, args, variables):
         # sh -c / eval / find -exec code whose output is piped or consumed
         # gets no lister exemption either.
-        reason = bash_reason(inner, depth + 1, consumed=piped)
+        reason = bash_reason(inner, depth + 1, consumed=piped, variables=variables)
         if reason:
             return reason
     reason = _rm_reason(args) if program == "rm" else None
@@ -541,42 +822,58 @@ def _simple_reason(raw_words: list[str], depth: int, piped: bool = False, scan_t
     # A lister prints names only; piped on (find ... | xargs cat) it doesn't.
     lister = program in LISTERS and not piped and not (program == "find" and any(a in FIND_ACTIONS for a in args))
     targets = {raw_words[k + 1] for k, w in enumerate(raw_words[:-1]) if w in REDIRECTS}
-    for raw_word in _scanned_words(program, raw_words):
+    for raw_word in _scanned_words(program, raw_words, consumed):
         redirect = raw_word in targets or any(c in raw_word for c in "<>")
-        for candidate in _expand_braces(raw_word):
-            for raw_token in re.split(r"[<>=:]", candidate):
-                if not raw_token:
-                    continue
-                globbing = any(c in raw_token for c in "*?[")  # unquoted only
-                token = restore(raw_token)
-                if lister and not redirect and any(c in token for c in "*?["):
-                    continue  # a pattern argument to ls/find/echo lists names only
-                pattern = secret_name(token)
-                if pattern:
-                    return f"touches a secret-shaped file ({pattern}): {token}"
-                if globbing and glob_could_match_secret(token):
-                    return f"glob {token} could match a secret-shaped file"
+        reason = _token_reason(raw_word, lister, redirect)
+        if reason:
+            return reason
     return None
 
 
-def bash_reason(command: str, depth: int = 0, consumed: bool = False) -> str | None:
+def bash_reason(command: str, depth: int = 0, consumed: bool = False,
+                variables: dict[str, list[str]] | None = None) -> str | None:
     """consumed: the command's output is used (inside $(...) or `...`), so a
-    lister's names feed another command and get no exemption."""
+    lister's names feed another command and get no exemption.
+    variables: what enclosing code assigned, for $NAME expansion."""
     if depth > MAX_DEPTH:
         return "command nesting too deep to check"
     try:
-        stripped, inner = scan(command)
+        stripped, inner, bodies = scan(command)
         commands = _commands(stripped)
     except Unclear as exc:
         return f"can't check this command safely ({exc})"
+    # Every assignment in the command, wherever it is ("F=-rf; rm $F"). Order
+    # isn't tracked; a later assignment counts too, which is the safe side.
+    variables = {name: list(values) for name, values in (variables or {}).items()}
+    for words, _piped in commands:
+        for name, value in _assignments(words):
+            known = variables.setdefault(name, [])
+            for variant in _expand(value, variables):
+                if variant not in known:
+                    known.append(variant)
     for sub in inner:
-        reason = bash_reason(sub, depth + 1, consumed=True)
+        reason = bash_reason(sub, depth + 1, consumed=True, variables=variables)
         if reason:
             return reason
+    producer: list[str] | None = None
     for words, piped in commands:
-        reason = _simple_reason(words, depth, piped or consumed)
+        reason = _simple_reason(words, depth, piped or consumed, consumed=consumed, variables=variables)
         if reason:
             return reason
+        # A shell reading code from stdin runs whatever is piped, here-stringed
+        # or heredoc'd into it.
+        try:
+            codes, unseen = _stdin_code(words, producer, bodies, variables)
+            if unseen:
+                return unseen
+            texts = [text for code in codes for text in _as_code(code, variables)]
+        except Unclear as exc:
+            return f"can't check this command safely ({exc})"
+        for text in texts:
+            reason = bash_reason(text, depth + 1, consumed=piped or consumed, variables=variables)
+            if reason:
+                return reason
+        producer = words if piped else None
     return None
 
 
