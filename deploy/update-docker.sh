@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 # Idempotent update for the JDAD Docker deploy on the droplet.
+# Builds before it swaps: the image build runs `jdad-mcp --check`, so a
+# commit that breaks the KB never replaces the running container. A commit
+# that builds but fails the health check is rolled back, the checkout is
+# reset to the rolled-back SHA, and the failed SHA is recorded so the next
+# run refuses it (JDAD_RETRY_FAILED=1 overrides).
 # Prechecks the token file, the env file, the Origin cert/key pair and the
 # container uid, git pull --ff-only, rebuild and restart the compose
 # service (project name "jdad"), then require a local HTTPS /healthz of 200
@@ -24,6 +29,7 @@ TOKEN_FILE="${JDAD_TOKEN_FILE_HOST:-$HOME/.config/jdad/token}"
 # The name the origin certificate must be valid for; the health probe
 # connects to 127.0.0.1 but verifies the certificate for this name.
 HEALTH_HOST="${JDAD_HEALTH_HOST:-jdad-mcp.jondevs.com}"
+FAILED_FILE="${JDAD_STATE_DIR:-$HOME/.config/jdad}/failed-sha"
 TLS_DIR="${JDAD_TLS_DIR:-$HOME/.config/jdad/tls}"
 CERT_FILE="${JDAD_SSL_CERTFILE_HOST:-$TLS_DIR/origin.crt}"
 KEY_FILE="${JDAD_SSL_KEYFILE_HOST:-$TLS_DIR/origin.key}"
@@ -232,7 +238,32 @@ rollback() {
     return 1
   fi
   echo "jdad: rolled back to $prev and $(health_url) is ok" >&2
+  if [[ "$label" != 1 ]]; then
+    # That commit's update-docker.sh refuses the migrated env file (no
+    # JDAD_TOKEN) before it pulls, so a reset would strand the next run.
+    echo "jdad: leaving the checkout on $(git -C "$ROOT" rev-parse --short HEAD): $prev predates the token file and its own update-docker.sh would refuse to run; fix forward with a new commit (or JDAD_RETRY_FAILED=1)" >&2
+  else
+    reset_checkout_to_image "$prev"
+  fi
   return 0
+}
+
+# Put the checkout back on the SHA baked into IMAGE, so the files on disk
+# (compose file, scripts) match what is running. --keep refuses to clobber
+# local edits; a refusal is reported, not fatal.
+reset_checkout_to_image() {
+  local image="$1" sha
+  sha="$(docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$image" 2>/dev/null \
+    | sed -n 's/^JDAD_GIT_SHA=//p' | head -n1)"
+  if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]] || ! git -C "$ROOT" cat-file -e "$sha^{commit}" 2>/dev/null; then
+    echo "jdad: rolled-back image has no usable JDAD_GIT_SHA ($sha); checkout left at $(git -C "$ROOT" rev-parse HEAD)" >&2
+    return 0
+  fi
+  if git -C "$ROOT" reset -q --keep "$sha" 2>/dev/null; then
+    echo "jdad: checkout reset to $sha to match the running image" >&2
+  else
+    echo "jdad: could not reset the checkout to $sha (local changes?); it stays at $(git -C "$ROOT" rev-parse HEAD)" >&2
+  fi
 }
 
 # Remove ${IMAGE_REPO}:<40-hex sha> tags except the ones to keep.
@@ -273,9 +304,26 @@ fi
 after="$(git -C "$ROOT" rev-parse HEAD)"
 export JDAD_GIT_SHA="$after"
 
-"${COMPOSE[@]}" up -d --build
+if [[ -f "$FAILED_FILE" && "$(head -n1 "$FAILED_FILE")" == "$after" && "${JDAD_RETRY_FAILED:-}" != 1 ]]; then
+  echo "jdad: $after failed its health check on an earlier run (recorded in $FAILED_FILE); refusing to deploy it again. Fix main, or set JDAD_RETRY_FAILED=1 to try anyway." >&2
+  if [[ "$before" != "$after" ]]; then
+    git -C "$ROOT" reset -q --keep "$before" || true
+  fi
+  exit 1
+fi
+
+# Build first: the image build runs `jdad-mcp --check`, and a failure here
+# leaves the running container exactly as it was.
+if ! "${COMPOSE[@]}" build; then
+  echo "jdad: building $after failed (the build includes jdad-mcp --check on the KB); the running container was not touched" >&2
+  exit 1
+fi
+"${COMPOSE[@]}" up -d --no-build
 
 if ! wait_for_health; then
+  mkdir -p "$(dirname "$FAILED_FILE")"
+  printf '%s\n' "$after" > "$FAILED_FILE"
+  echo "jdad: recorded $after as failed in $FAILED_FILE" >&2
   rollback_target="$previous_image"
   if [[ -z "$rollback_target" ]] && docker image inspect "${IMAGE_REPO}:previous" >/dev/null 2>&1; then
     rollback_target="${IMAGE_REPO}:previous"
@@ -284,6 +332,7 @@ if ! wait_for_health; then
   exit 1
 fi
 
+rm -f "$FAILED_FILE"
 prune_images "${IMAGE_REPO}:${after}" "$previous_image"
 
 if [[ "$before" != "$after" ]]; then

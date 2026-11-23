@@ -1,0 +1,8 @@
+---
+description: Python files in this repo
+globs: "**/*.py,scripts/*.py"
+alwaysApply: false
+---
+> jdad build from catalog/rules/python.md; do not edit
+
+Run ruff before committing.
