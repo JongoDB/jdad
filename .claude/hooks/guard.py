@@ -34,6 +34,7 @@ import fnmatch
 import json
 import re
 import shlex
+import signal
 import sys
 from pathlib import PurePath
 
@@ -74,6 +75,8 @@ FIND_ACTIONS = {"-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fp
 MESSAGE_OPTIONS = {"git": {"-m", "--message"}, "gh": {"-b", "--body", "-t", "--title", "-n", "--notes"}}
 TEXT_PROGRAMS = {"echo", "printf"}
 MAX_DEPTH = 4
+MAX_WORDS = 256  # a simple command longer than this is denied, not analysed
+TIME_BUDGET_SECONDS = 5  # the hook denies if analysis takes longer (a timeout would fail open)
 # Glob characters inside quotes are literal; the scanner swaps them for
 # these markers so only unquoted ones count as globs.
 QUOTED_GLOB = {"*": "\x01", "?": "\x02", "[": "\x03"}
@@ -377,16 +380,30 @@ def _realistic_secret(name: str) -> bool:
     )
 
 
-def _strip_wrappers(words: list[str]) -> list[str]:
-    """Drop what can precede the real program: shell keywords and braces
-    (if, do, {, !), VAR=value assignments, and wrapper programs."""
+def _skip_prefix(words: list[str]) -> list[str]:
+    """Drop shell keywords and braces (if, do, {, !), "function NAME {" and
+    "coproc NAME {", and VAR=value assignments. Shared by every caller so
+    the parses can't drift apart."""
     while words:
         if words[0] in ("function", "coproc") and len(words) > 2 and words[2] in ("{", "("):
-            words = words[2:]  # "function NAME {", "coproc NAME {": drop the name too
-            continue
-        if words[0] in KEYWORDS or ASSIGNMENT_RE.fullmatch(words[0]):
+            words = words[2:]
+        elif words[0] in KEYWORDS or ASSIGNMENT_RE.fullmatch(words[0]):
             words = words[1:]
+        else:
+            break
+    return words
+
+
+def _strip_wrappers(words: list[str]) -> list[str]:
+    """Drop what can precede the real program: the prefix (_skip_prefix)
+    and wrapper programs with their options."""
+    while words:
+        skipped = _skip_prefix(words)
+        if skipped is not words:
+            words = skipped
             continue
+        if not words:
+            return words
         wrapper = PurePath(words[0]).name
         if wrapper not in WRAPPERS:
             return words
@@ -470,24 +487,30 @@ def _nested_commands(program: str, args: list[str]) -> list[str]:
 
 def _after_first_wrapper(words: list[str]) -> list[str] | None:
     """The words after the first wrapper program (sudo, env, timeout, xargs,
-    ...), skipping leading keywords and assignments; None if there's none."""
-    for i, word in enumerate(words):
-        if word in KEYWORDS or ASSIGNMENT_RE.fullmatch(word):
-            continue
-        return words[i + 1:] if PurePath(restore(word)).name in WRAPPERS else None
+    ...) once the prefix is skipped; None if the program isn't a wrapper."""
+    words = _skip_prefix(words)
+    if words and PurePath(restore(words[0])).name in WRAPPERS:
+        return words[1:]
     return None
 
 
-def _simple_reason(raw_words: list[str], depth: int, piped: bool = False) -> str | None:
+def _simple_reason(raw_words: list[str], depth: int, piped: bool = False, scan_tail: bool = True) -> str | None:
+    if len(raw_words) > MAX_WORDS:
+        return f"command too long to check ({len(raw_words)} words, limit {MAX_WORDS})"
     # Wrapper options vary by tool and platform (attached values, clusters,
     # durations), so rather than trust one parse, check every later word
     # position as a possible program: "sudo -uroot rm -rf x" finds "rm -rf x".
-    tail = _after_first_wrapper(raw_words)
-    if tail and depth < MAX_DEPTH:
+    # This runs once per simple command (scan_tail=False below): every
+    # position is already covered, so nested wrappers add nothing and the
+    # cost stays quadratic in the word count, not exponential.
+    tail = _after_first_wrapper(raw_words) if scan_tail else None
+    if tail:
+        if depth >= MAX_DEPTH:
+            return "command nesting too deep to check"
         for i in range(len(tail)):
             if restore(tail[i]).startswith("-"):
                 continue  # an option, not a program
-            reason = _simple_reason(tail[i:], depth + 1, piped)
+            reason = _simple_reason(tail[i:], depth + 1, piped, scan_tail=False)
             if reason:
                 return reason
     raw_words = _strip_wrappers([restore(w) for w in raw_words[:1]] + raw_words[1:])
@@ -579,7 +602,36 @@ def decide(event: dict) -> str | None:
     return None
 
 
+def _out_of_time(_signum, _frame) -> None:
+    raise TimeoutError
+
+
 def main() -> int:
+    # A hook that times out fails open, so the guard denies on its own clock first.
+    if hasattr(signal, "SIGALRM"):
+        signal.signal(signal.SIGALRM, _out_of_time)
+        signal.alarm(TIME_BUDGET_SECONDS)
+    try:
+        return _main()
+    except TimeoutError:
+        _deny(f"the guard ran out of time ({TIME_BUDGET_SECONDS}s) checking this command")
+        return 0
+
+
+def _deny(reason: str) -> None:
+    json.dump(
+        {
+            "hookSpecificOutput": {
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": f"{reason} (AGENTS.md R-sec-2).",
+            }
+        },
+        sys.stdout,
+    )
+
+
+def _main() -> int:
     try:
         event = json.load(sys.stdin)
     except (json.JSONDecodeError, UnicodeDecodeError):
@@ -587,16 +639,7 @@ def main() -> int:
         return 2
     reason = decide(event if isinstance(event, dict) else {})
     if reason:
-        json.dump(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "PreToolUse",
-                    "permissionDecision": "deny",
-                    "permissionDecisionReason": f"{reason} (AGENTS.md R-sec-2).",
-                }
-            },
-            sys.stdout,
-        )
+        _deny(reason)
     return 0
 
 

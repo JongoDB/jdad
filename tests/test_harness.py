@@ -220,6 +220,11 @@ def test_guard_allows(event: dict) -> None:
         bash("env -- FOO=1 rm -rf build"),
         bash("rm -r } build -f"),
         bash("coproc w { rm -rf build; }"),
+        # third review: one prefix skipper, fail closed at limits
+        bash("function f { timeout 1e1 rm -rf build; }"),
+        bash("coproc w { sudo -uroot rm -rf build; }"),
+        bash("sudo " * 300 + "rm -rf build"),  # too long to check: deny, quickly
+        bash("ls " + "a " * 400),  # any simple command over the word cap is denied
         # sixth review round
         bash("echo a\\ # ; rm -rf build"),  # "#" after an escaped space isn't a comment
         bash("cat <<\"E\\OF\"\nEOF\nrm -rf build\nE\\OF"),  # backslash in a quoted delimiter: deny
@@ -367,3 +372,13 @@ def test_known_gaps_are_documented_not_caught(command: str) -> None:
     """The guard docstring lists these as out of reach. If one starts being
     caught, move it to the deny list and update the docstring."""
     assert decision(bash(command)) == "allow"
+
+
+def test_nested_wrappers_are_checked_in_linear_time() -> None:
+    """Every-position scanning runs once per simple command, so stacked
+    wrappers can't make the hook slow enough to time out (a timeout fails open)."""
+    import time
+
+    start = time.monotonic()
+    assert decision(bash("sudo env timeout 5 " * 60 + "echo ok")) in ("allow", "deny")
+    assert time.monotonic() - start < 2.0
