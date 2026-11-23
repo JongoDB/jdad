@@ -27,7 +27,10 @@ PRACTICE = "# P\n## A [db]\n- Rule. (src: tips #3) {#p.a.rule}\n"
 
 def source_text(**overrides: str | None) -> str:
     fields = {**FIELDS, **overrides}
-    lines = ["---"] + [f"{k}: {v}" for k, v in fields.items() if v is not None] + ["---", "# Ten tips", ""]
+    items = fields.get("items") or "0"
+    count = int(items) if str(items).isdigit() else 0
+    body = ["# Ten tips", f"## The {items} items"] + [f"{n}. Tip {n}." for n in range(1, count + 1)]
+    lines = ["---"] + [f"{k}: {v}" for k, v in fields.items() if v is not None] + ["---", *body, ""]
     return "\n".join(lines)
 
 
@@ -157,3 +160,47 @@ def test_template_is_not_a_source() -> None:
     fields, problems = parse_frontmatter((REPO_ROOT / "sources" / "_TEMPLATE.md").read_text())
     assert problems == []
     assert set(fields) == {"title", "author", "url", "format", "posted", "retrieved", "capture", "items", "cite_as"}
+
+
+# Checker batch 3 (#17 gaps): item counts and _-prefixed files.
+
+
+def _source_findings(tmp_path: Path, text: str) -> list[str]:
+    root = make_kb(tmp_path, {"2026-01-02-tips.md": text})
+    return [f.message for f in lint_kb(root) if f.check == "source"]
+
+
+def test_items_heading_must_match_the_count(tmp_path: Path) -> None:
+    text = source_text().replace("## The 10 items", "## The 9 items")
+    assert any("heading says 9" in m for m in _source_findings(tmp_path, text))
+
+
+def test_items_heading_is_required(tmp_path: Path) -> None:
+    text = source_text().replace("## The 10 items", "## Tips")
+    assert any("'## The N items'" in m for m in _source_findings(tmp_path, text))
+
+
+def test_numbered_items_must_run_one_to_items(tmp_path: Path) -> None:
+    gap = source_text().replace("\n7. Tip 7.", "")
+    assert any("numbered items" in m for m in _source_findings(tmp_path / "gap", gap))
+    extra = source_text().replace("10. Tip 10.", "10. Tip 10.\n11. Tip 11.")
+    assert any("numbered items" in m for m in _source_findings(tmp_path / "extra", extra))
+
+
+def test_inline_item_lists_need_only_the_heading(tmp_path: Path) -> None:
+    head = source_text().split("## The 10 items")[0]
+    text = head + "## The 10 items, verbatim\n1 One. 2 Two. 3 Three. 4 Four. 5 Five. 6 Six. 7 Seven. 8 Eight. 9 Nine. 10 Ten.\n"
+    assert _source_findings(tmp_path, text) == []
+
+
+@pytest.mark.parametrize("name", ["_TEMPLATE", "_TEMPLATE.md", "TEMPLATE", "template"])
+def test_underscore_files_are_never_served(name: str) -> None:
+    with pytest.raises(FileNotFoundError):
+        KnowledgeBase(REPO_ROOT).get_source(name)
+
+
+def test_underscore_practice_files_are_never_served(tmp_path: Path) -> None:
+    root = make_kb(tmp_path, {})
+    (root / "practices" / "_draft.md").write_text("# Draft\n")
+    with pytest.raises(FileNotFoundError):
+        KnowledgeBase(root).get_practice("_draft")

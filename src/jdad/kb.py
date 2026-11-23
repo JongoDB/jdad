@@ -676,8 +676,9 @@ class KnowledgeBase:
             raise FileNotFoundError(f"Invalid {kind} id {needle!r}")
 
         # Only files kb_markdown_files allows (no symlinks, nothing outside the
-        # KB, nothing oversized): the same set list_* returns.
-        files = kb_markdown_files(self.root, directory)
+        # KB, nothing oversized), minus `_`-prefixed ones (templates, drafts):
+        # the same set list_* returns, so nothing unlinted is ever served.
+        files = [p for p in kb_markdown_files(self.root, directory) if not p.name.startswith("_")]
         for path in files:
             if path.name == f"{stem}.md":
                 return path

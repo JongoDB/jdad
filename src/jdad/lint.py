@@ -43,6 +43,7 @@ Structure checks (practices/*.md, docs/kb-schema.md):
 - ``source``: a source file (sources/*.md, not ``_``-prefixed) whose
   frontmatter is missing, has a missing, empty or unknown field, a bad date,
   a file-name date that differs from ``retrieved``, a non-positive ``items``,
+  an ``items`` that doesn't match the '## The N items' heading or numbered list,
   a non-http(s) ``url``, or a malformed or duplicate ``cite_as``
   (docs/ingestion.md).
 - ``citation`` also fails when ``(src: <name> #n)`` names no source's
@@ -577,6 +578,25 @@ _CITE_AS_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
 _SRC_CITATION_RE = re.compile(r"^src:\s*([a-z0-9][a-z0-9-]*)\s+(#\d+(?:\s*,\s*#\d+)*)$")
 
 
+_ITEMS_HEADING_RE = re.compile(r"^## The (\d+) items\b", re.MULTILINE)
+_NUMBERED_ITEM_RE = re.compile(r"^(\d+)\. ", re.MULTILINE)
+
+
+def _item_count_problems(text: str, items: int) -> list[str]:
+    """`items` must match the body: a '## The N items' heading with N ==
+    items, and, when the items are a numbered list, exactly 1..items."""
+    heading = _ITEMS_HEADING_RE.search(text)
+    if not heading:
+        return [f"no '## The N items' heading for the {items} items"]
+    problems = []
+    if int(heading.group(1)) != items:
+        problems.append(f"items is {items} but the heading says {heading.group(1)}")
+    numbers = [int(n) for n in _NUMBERED_ITEM_RE.findall(text[heading.end():])]
+    if numbers and numbers != list(range(1, items + 1)):
+        problems.append(f"numbered items run {numbers[0]}..{numbers[-1]} ({len(numbers)} lines), not 1..{items} in order")
+    return problems
+
+
 def _source_findings(root: Path) -> tuple[list[Finding], dict[str, tuple[str, int]]]:
     """Frontmatter checks on sources/*.md. Returns findings and {cite_as: (path, items)}."""
     findings: list[Finding] = []
@@ -623,6 +643,9 @@ def _source_findings(root: Path) -> tuple[list[Finding], dict[str, tuple[str, in
         items = int(items_text) if items_text.isdigit() else 0
         if items_text and items < 1:
             bad(f"items '{items_text}' is not a positive integer")
+        elif items:
+            for message in _item_count_problems(text, items):
+                bad(message)
         cite_as = meta.get("cite_as", "")
         if cite_as:
             if not _CITE_AS_RE.match(cite_as):
