@@ -532,6 +532,10 @@ def test_batch10_bypasses_are_denied(command: str) -> None:
         bash("bash << EOF\nuv run pytest -q\nEOF"),
         bash("bash --rcfile x /dev/stdin <<< 'uv run pytest -q'"),
         bash("bash scripts/check.sh 2>/dev/null"),
+        # -c code and the positional parameters after it aren't script paths (found by dogfooding)
+        bash("bash -c 'ls /dev/null'"),
+        bash("bash -c 'echo hi > /dev/null; uv run pytest'"),
+        bash("bash -c 'x' arg0 /dev/null"),
         bash("rm ${HOME:+-r} build"),
         # message text mentioning a ${VAR:-default} stays one word (found by dogfooding)
         bash('git commit -q -m "docs: ${F:--rf} expands; f=.env; cat $f is denied"'),

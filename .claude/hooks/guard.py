@@ -695,6 +695,8 @@ def _stdin_code_argv(words: list[str], producer: list[str] | None, bodies: list[
     args, k = rest[1:], 0
     while k < len(args):
         arg = args[k]
+        if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg):
+            break  # -c: the next word is code (checked by _nested_commands), the rest are $0, $1...
         if arg in SHELL_VALUE_OPTIONS:
             value = args[k + 1] if k + 1 < len(args) else ""
             if arg in ("--rcfile", "--init-file") and _device_path(value):
