@@ -116,11 +116,16 @@ def test_settings_hooks_point_at_executable_scripts() -> None:
         bash("(cd src && ls)"),
         bash("for f in *.py; do echo $f; done"),
         bash("if [ -f x ]; then rm -r build; fi"),
+        bash("timeout 5 uv run pytest"),
+        bash("sudo -u x ls"),
+        bash("find . | xargs -I{} echo {}"),
+        bash("find . -print0 | xargs -0 -n1 echo"),
+        bash("timeout -s KILL 5 git push origin feat/x"),
     ],
     ids=["readme", "abs-src", "env-example-name", "pytest", "normal-push", "rm-file", "rm-r", "heredoc-body",
          "commit-message", "commit-message-eq", "gh-body", "echo-text", "ls-star", "cat-md-glob", "bash-lc-ok",
          "escaped-substitution", "quoted-heredoc-literal", "find-names", "cat-md-txt",
-         "dir-glob-loop", "arith-shift", "env-assign-ok", "subshell-ok", "for-loop-ok", "if-rm-r-ok"],
+         "dir-glob-loop", "arith-shift", "env-assign-ok", "subshell-ok", "for-loop-ok", "if-rm-r-ok", "timeout-ok", "sudo-u-ok", "xargs-I-ok", "xargs-0-n1-ok", "timeout-push-ok"],
 )
 def test_guard_allows(event: dict) -> None:
     assert decision(event) == "allow"
@@ -206,6 +211,15 @@ def test_guard_allows(event: dict) -> None:
         bash("timeout 1.5 rm -rf build"),
         bash("timeout 1.5s git push -f"),
         bash("env -- rm -rf build"),
+        # second review of the batch-3 fix: wrappers fail closed, braces don't split
+        bash("sudo -uroot rm -rf build"),
+        bash("find . | xargs -Ia rm -rf a"),
+        bash("find . | xargs -J % rm -rf %"),
+        bash("timeout 1e1 rm -rf build"),
+        bash("timeout inf git push -f"),
+        bash("env -- FOO=1 rm -rf build"),
+        bash("rm -r } build -f"),
+        bash("coproc w { rm -rf build; }"),
         # sixth review round
         bash("echo a\\ # ; rm -rf build"),  # "#" after an escaped space isn't a comment
         bash("cat <<\"E\\OF\"\nEOF\nrm -rf build\nE\\OF"),  # backslash in a quoted delimiter: deny
