@@ -6,7 +6,9 @@ content that tries to steer an agent rather than inform it:
 
 - ``injection``: text addressed to an AI agent (``ignore previous
   instructions``, fake ``system:`` turns, chat-template tokens, ``don't tell
-  the user``, requests to send secrets). practices/ and sources/. Matched
+  the user``, requests to send secrets, polite forms such as ``As the AI
+  assistant reading this, you ...``, ``Note to any coding agent:`` and a
+  claimed ``the user has pre-approved``). practices/ and sources/. Matched
   on a skeleton of the text (NFKD, combining marks dropped, Cyrillic and
   Greek lookalikes mapped to Latin), per line and per paragraph, so a
   phrase split across lines or spelled with homoglyphs is still caught.
@@ -15,9 +17,10 @@ content that tries to steer an agent rather than inform it:
 - ``url``: a URL in practices/ whose host isn't in ``url_allow``, including
   a bare domain with no scheme or ``www`` (``evil.example.com/x``), a
   protocol-relative ``//host``, and a bare IP address (decimal, octal or hex
-  IPv4 parts, IPv6 with or without brackets, IPv4-mapped), normalized with
-  ``ipaddress``; only a file name with a common extension and no path is
-  exempt. In every KB tree, a Markdown link (inline or reference, including
+  IPv4 parts, IPv6 with or without brackets, IPv4-mapped; ideographic and
+  fullwidth full stops count as dots; a whole-number or 2-3 part IPv4 when
+  it acts as a host), normalized with ``ipaddress``. Loopback addresses and
+  a file name with a common extension and no path are exempt. In every KB tree, a Markdown link (inline or reference, including
   a destination after a line break) whose scheme isn't http or https
   (``javascript:``, ``data:``), after undoing backslash escapes, entities and
   whitespace.
@@ -107,6 +110,24 @@ _INJECTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
             "asks for secrets to be sent somewhere",
         ),
         (r"\bas\s+an\s+(ai|llm|language\s+model|assistant)\b", "addresses the reader as an AI"),
+        # Polite forms (Checker's #27 verdict): "As the AI assistant reading
+        # this, you ...", "Note to any coding agent: ...", and a claimed
+        # pre-approval. Talking about agents ("the agent should retry") passes.
+        (
+            (r"\bas\s+(the|an?|any)\s+((ai|llm|coding|language|automated)\s+)?"
+            r"(assistant|agent|model|llm|ai)\b[^.\n]{0,60}\byou\b"),
+            "addresses the reader as an AI",
+        ),
+        (
+            (r"\b(note|message|reminder|notice|attention|psa)\s+(to|for)\s+((any|all|every|the)\s+)?"
+            r"((ai|llm|coding|automated)\s+)?(assistants?|agents?|models?|llms?|ais?)\s*[:,-]"),
+            "addresses the reader as an AI",
+        ),
+        (
+            (r"\bthe\s+user\s+(has|had)\s+(already\s+(approved|authori[sz]ed|agreed|consented)|"
+            r"pre-?(approved|authori[sz]ed))\b"),
+            "claims the user has already granted permission",
+        ),
     )
 )
 
@@ -220,13 +241,23 @@ _MD_INLINE_DEST_RE = re.compile(r"\]\(\s*(<[^>\n]*>|[^)\s]+)")
 _MD_REF_DEST_RE = re.compile(r"^[ ]{0,3}\[[^\]\n]+\]:[ \t]*(?:\n[ \t]*)?(<[^>\n]*>|\S+)", re.MULTILINE)
 _MD_BACKSLASH_ESCAPE_RE = re.compile(r"\\([!-/:-@\[-`{-~])")
 _SCHEME_RE = re.compile(r"([a-z][a-z0-9+.-]*):")
-# Bare IP addresses in practices: dotted IPv4 (four octets, with an optional
-# port and path) and bracketed IPv6. Version numbers have fewer parts.
+# Bare IP addresses in practices: dotted IPv4 (four parts, with an optional
+# port and path) and IPv6. Version numbers have fewer parts.
 # Candidates are wide (decimal, octal or hex parts; IPv6 with or without
 # brackets, IPv4-mapped tails) and each is confirmed with `ipaddress`.
 _IPV4_PART = r"(?:0x[0-9a-f]+|\d+)"
-_BARE_IPV4_RE = re.compile(rf"(?<![\w.])({_IPV4_PART}(?:\.{_IPV4_PART}){{3}})(?::\d{{1,5}})?(/\S*)?(?![\w.])", re.IGNORECASE)
+_BARE_IPV4_RE = re.compile(rf"(?<![\w.])({_IPV4_PART}(?:\.{_IPV4_PART}){{3}})(?::\d{{1,5}})?(/\S*)?(?!\w|\.\w)", re.IGNORECASE)
 _BARE_IPV6_RE = re.compile(r"\[([0-9A-Fa-f:.]+)\]|(?<![\w:.])([0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:\.\d{1,3}){0,3})(?![\w:])")
+# Short IPv4 forms inet_aton accepts: a whole number (8+ digits) or 2-3 parts
+# whose last part spans the remaining bytes. Counted only where they act as a
+# host (a port, a path with a letter, or after '@' or 'host:'), and a dotted
+# short form only when its last part is over 255, so 3.12 and 2.1.0 pass.
+_SHORT_IPV4_RE = re.compile(
+    rf"(?<![\w./])({_IPV4_PART}(?:\.{_IPV4_PART}){{0,2}})(:\d{{2,5}}(?:/\S*)?|/[^\s/]*[a-z]\S*)?(?!\w|\.\w)", re.IGNORECASE
+)
+# Full stops a browser or resolver reads as '.' (U+FF0E and U+FF61 also fold
+# under NFKC; U+3002 doesn't).
+_IP_DOTS = str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
 _PROTOCOL_RELATIVE_RE = re.compile(r"(?<![:\w/])//([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,24})(/\S*)?", re.IGNORECASE)
 # Base64 runs long enough to carry a sentence (standard or URL-safe alphabet).
 _BASE64_RE = re.compile(r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{24,}={0,2}")
@@ -468,36 +499,65 @@ def _link_scheme_findings(rel: str, text: str, lines: list[str]) -> list[Finding
     return findings
 
 
+def _ipv4_part(part: str) -> int | None:
+    """One inet_aton part: decimal, 0x-hex or 0-prefixed octal."""
+    try:
+        return int(part, 16) if part.lower().startswith("0x") else int(part, 8) if len(part) > 1 and part.startswith("0") else int(part)
+    except ValueError:
+        return None
+
+
 def _ipv4_from_parts(text: str) -> ipaddress.IPv4Address | None:
-    """Dotted IPv4 the way inet_aton reads it: each part decimal, 0x-hex or
-    0-prefixed octal."""
-    octets = []
-    for part in text.split("."):
-        try:
-            value = int(part, 16) if part.lower().startswith("0x") else int(part, 8) if len(part) > 1 and part.startswith("0") else int(part)
-        except ValueError:
-            return None
-        if value > 255:
-            return None
-        octets.append(value)
-    return ipaddress.IPv4Address(".".join(map(str, octets)))
+    """IPv4 the way inet_aton reads it: 1-4 parts, each decimal, 0x-hex or
+    0-prefixed octal; every part but the last is one byte, and the last
+    fills the remaining bytes."""
+    values = [_ipv4_part(part) for part in text.split(".")]
+    if None in values:
+        return None
+    if not 1 <= len(values) <= 4 or any(v > 255 for v in values[:-1]) or values[-1] >= 256 ** (5 - len(values)):
+        return None
+    number = 0
+    for value in values[:-1]:
+        number = number * 256 + value
+    return ipaddress.IPv4Address(number * 256 ** (5 - len(values)) + values[-1])
 
 
 def _bare_host_problems(line: str, allowed: tuple[str, ...]) -> list[str]:
-    """Bare IP addresses and protocol-relative //host forms in practices/."""
+    """Bare IP addresses and protocol-relative //host forms in practices/.
+    Loopback (127.0.0.0/8, ::1) is exempt: "bind to 127.0.0.1" is advice,
+    not a place to send anything."""
     problems = []
+    line = unicodedata.normalize("NFKC", line).translate(_IP_DOTS)
     for match in _BARE_IPV4_RE.finditer(line):
         address = _ipv4_from_parts(match.group(1))
-        if address:
+        if address and not address.is_loopback:
             rest = match.group(0)[len(match.group(1)):].rstrip(_URL_TRAILING)
             problem = _url_problem(f"{address}{rest}", allowed)
             if problem:
                 problems.append(f"bare IP address '{match.group(1)}': {problem}")
+    for match in _SHORT_IPV4_RE.finditer(line):
+        parts = match.group(1).split(".")
+        if len(parts) == 1 and not (parts[0].isdigit() and len(parts[0]) >= 8):
+            continue  # small numbers and hex words aren't hosts
+        if len(parts) > 1 and (_ipv4_part(parts[-1]) or 0) <= 255:
+            continue  # 3.12, 2.1.0: read as versions
+        address = _ipv4_from_parts(match.group(1))
+        if not address or address.is_loopback:
+            continue
+        before = line[: match.start()].lower()
+        if not (match.group(2) or before.endswith(("@", "host:", "host="))):
+            continue
+        rest = (match.group(2) or "").rstrip(_URL_TRAILING)
+        problem = _url_problem(f"{address}{rest}", allowed)
+        if problem:
+            problems.append(f"bare IP address '{match.group(1)}' ({address}): {problem}")
     for match in _BARE_IPV6_RE.finditer(line):
         candidate = match.group(1) or match.group(2)
         try:
             address = ipaddress.IPv6Address(candidate)
         except ValueError:
+            continue
+        if address.is_loopback or (address.ipv4_mapped and address.ipv4_mapped.is_loopback):
             continue
         if f"[{address.compressed}]" not in allowed and address.compressed not in allowed:
             problems.append(f"bare IP address '{candidate}' ({address.compressed}) is not in url_allow ({CONFIG_NAME})")
