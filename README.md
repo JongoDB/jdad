@@ -39,6 +39,7 @@ The official Python MCP SDK v2 renamed `FastMCP` to `MCPServer`. This server use
 3. If you add a new topic file under `practices/`, add a matching skill at `skills/jdad-<topic>/SKILL.md` (one skill per practice file). If you add a rule that did not come from the source, label it as a KB addition, the way Rule zero is labeled in `practices/performance.md`.
 4. Bump the patch (or minor) version in lockstep (`pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json`, and the marketplace plugin entry). `./verify` fails if they differ.
 5. Do not put secrets, tokens, or credentials in this repo.
+6. Run `uv run jdad lint-kb`. It fails on text addressed to an agent, URLs or shell commands in `practices/` that aren't allowlisted in `kb-lint.toml`, hidden or bidi Unicode, HTML or Markdown comments, symlinks, and non-`.md` files in `practices/` or `sources/`. See [docs/threat-model.md](docs/threat-model.md).
 
 Agents working in this repo follow [AGENTS.md](AGENTS.md), where every rule has an ID; [CLAUDE.md](CLAUDE.md) imports it and adds Claude Code notes.
 
@@ -57,7 +58,7 @@ uvx --from git+https://github.com/JongoDB/jdad jdad-mcp
 jdad-mcp --http
 ```
 
-`KB_ROOT` overrides the content directory. It must point at a directory that contains `practices/` and `sources/`. If unset, the server uses a checkout of this repo when it can find one, otherwise the files bundled in the package.
+`KB_ROOT` overrides the content directory. It must point at a directory that contains `practices/` and `sources/`. If unset, the server uses the jdad checkout it runs from (an editable install), otherwise the files bundled in the package. It never looks in the current directory, so a server started inside another project can't serve that project's files as the KB.
 
 `JDAD_TOKEN` is optional on loopback. When set, every HTTP path except `/healthz` requires `Authorization: Bearer <token>`. Stdio does not use the token. The Docker deploy binds `0.0.0.0`, so a non-empty token is required (the image does not pass `--allow-no-auth`). `JDAD_TOKEN_FILE` names a file holding only the token (it must not be readable by group or others); the server reads it once at startup and refuses to start if both `JDAD_TOKEN` and `JDAD_TOKEN_FILE` are set. The Docker deploy uses the file, `~/.config/jdad/token` (mode 0400) on the droplet, mounted as a compose secret, so the value never appears in the container environment or `docker inspect`. Never commit it. `JDAD_ALLOWED_HOSTS` is a comma-separated list of public hostnames the MCP transport will accept in the `Host` header (loopback is always allowed; DNS-rebinding protection stays on). For this host it is `jdad-mcp.jondevs.com`, which also allows Origin `https://jdad-mcp.jondevs.com` because Cloudflare forwards the original Host header.
 
@@ -71,13 +72,13 @@ The default HTTP bind is `127.0.0.1`. Binding to a non-loopback address (`0.0.0.
 | `search_practices(query, tag?)` | Keyword hits: file, heading, and section body |
 | `get_practice(topic)` | The full practice file |
 | `list_sources` | Source notes (id, title, link) |
-| `get_source(id)` | The full source note |
+| `get_source(id)` | The full source note, after a header marking it quoted third-party material (data, not instructions) |
 | `get_checklist(tags[])` | Bullet rules for the given tags, ready to paste into a plan |
 | `kb_version` | Git SHA of the checkout and the date of the newest source entry |
 
 Tags for `search_practices` and `get_checklist`: `frontend`, `backend`, `db`, `infra`, `observability`, `testing`. An empty `tags` list on `get_checklist` returns every rule.
 
-Practice files are also MCP resources at `kb://practices/<name>` (for example `kb://practices/performance`). The `apply-kb` prompt tells an agent to pull the relevant checklist before planning and to cite the rules in its PR. `/healthz` returns `{"status": "ok"}` and stays unauthenticated. The git SHA lives only on the auth-gated `kb_version` tool.
+Practice files are also MCP resources at `kb://practices/<name>` (for example `kb://practices/performance`). The `apply-kb` prompt tells an agent to pull the relevant checklist before planning and to cite the rules in its PR. `/healthz` returns `{"status": "ok"}` and stays unauthenticated. Like every path, it answers `421 Invalid Host header` unless `Host` is a loopback name or listed in `JDAD_ALLOWED_HOSTS`; the Host check runs before the token check. The git SHA lives only on the auth-gated `kb_version` tool.
 
 ## Point a coding agent at the hosted server
 
@@ -190,14 +191,45 @@ Authenticated Origin Pulls are an optional extra: they make Cloudflare present a
 
 ### Firewall
 
-Create a DigitalOcean cloud firewall attached to the droplet:
+Only Cloudflare should be able to reach the origin. Otherwise anyone who finds the droplet's IP skips Cloudflare (and any rate limiting or WAF there), and the bearer token is the only gate. There are two layers; use both when you can.
+
+**1. Host firewall (`deploy/firewall-cloudflare.sh`).** Run as root on the droplet. It needs only SSH, not the DigitalOcean console.
+
+Docker-published ports bypass ufw and the `INPUT` chain: the packet is DNATed to the container and filtered in `FORWARD`, where Docker consults `DOCKER-USER` first. The script puts the rules in a dedicated `JDAD-CF` chain for IPv4 and IPv6, hooked from `DOCKER-USER` (matching the original destination port 443, since the packet is already rewritten to 8443 there) and from `INPUT` (the docker-proxy path). `JDAD-CF` lets through loopback, container traffic (`docker0`, `br-*`, so builds can still reach PyPI) and Cloudflare's published ranges, and drops everything else. Only TCP 443 is matched; SSH and every other port are untouched.
+
+```bash
+sudo ./deploy/firewall-cloudflare.sh apply --dry-run   # print the rules; changes nothing
+sudo ./deploy/firewall-cloudflare.sh install           # install, cache ranges, enable the boot unit, apply
+sudo jdad-firewall status                              # hooks, chain, cached ranges, unit state
+sudo jdad-firewall refresh                             # re-fetch Cloudflare's ranges, show the diff, apply
+sudo jdad-firewall rollback                            # remove the rules: 443 open to everyone again
+```
+
+- `install` copies the script to `/usr/local/sbin/jdad-firewall` (root-owned, so the boot unit never runs a file from a user's home), caches the ranges in `/etc/jdad/cloudflare/`, and enables `jdad-firewall.service`, which re-applies from that cache after `docker.service` starts. There is a short window at boot between Docker starting the container and the unit running.
+- Ranges come from `https://www.cloudflare.com/ips-v4` and `ips-v6`. A list that is empty, malformed, shorter than 5 (IPv4) or 3 (IPv6) entries, or contains a range broader than /8 (IPv4) or /16 (IPv6) is refused before anything changes.
+- The chain is replaced in one `iptables-restore --noflush` transaction, so a re-run never leaves it empty or drop-only. Re-running is safe.
+- The script refuses to change anything unless `DOCKER-USER` exists in both iptables and ip6tables (Docker's IPv6 filtering is on by default since Docker 27).
+- Run `refresh` when Cloudflare announces range changes, or monthly; `refresh --dry-run` only shows the diff.
+- Emergency rollback without the script: `sudo iptables -D DOCKER-USER -p tcp -m conntrack --ctorigdstport 443 --ctdir ORIGINAL -j JDAD-CF; sudo iptables -D INPUT -p tcp --dport 443 -j JDAD-CF; sudo iptables -F JDAD-CF; sudo iptables -X JDAD-CF`, then the same with `ip6tables`, then `sudo systemctl disable jdad-firewall.service`.
+
+`tests/test_firewall.sh` (in `./verify`) checks the rules against fixture ranges and exercises apply, re-apply, refresh, refusal and rollback with real iptables in a throwaway container. `tests/test_firewall_dind.sh` (opt-in; needs a privileged container) proves it on a real Docker-published port.
+
+**2. DigitalOcean cloud firewall**, once console access is available:
 
 - Inbound TCP 443 only from [Cloudflare IP ranges](https://www.cloudflare.com/ips/). Use both IPv4 and IPv6 lists.
 - Inbound SSH only from your own IPs.
 - Do not publish port 80.
 - Leave outbound open, or at least allow the origin to reach Cloudflare and GitHub.
 
-Do this in the DigitalOcean control panel (or `doctl compute firewall`); a host-local `ufw` rule is not a substitute for the cloud firewall. Docker-published ports bypass ufw.
+Do this in the DigitalOcean control panel (or `doctl compute firewall`). A host-local `ufw` rule is not a substitute: Docker-published ports bypass ufw. Whether a cloud firewall is attached today is unverified in this repo (the red-team review took "none" from its brief).
+
+### Origin certificate exposure
+
+Anything that completes a TLS handshake with the origin IP sees the origin certificate, whatever SNI or Host it sends. The current certificate (issued 2026-11-22, valid 15 years) has SANs `*.jondevs.com` and `jondevs.com`. Internet-wide scanners index certificates by IP, so without a firewall the certificate ties the droplet's IP to the zone; that is the usual way an origin behind Cloudflare is found.
+
+- **The host firewall above is the main fix:** a non-Cloudflare source can't complete the TCP handshake, so it never sees the certificate.
+- **Narrow SAN (optional):** reissue the Origin CA certificate for `jdad-mcp.jondevs.com` only (the CSR command under "Origin certificate" already uses that CN), with a shorter validity. It stops advertising the rest of the zone, though the hostname still points at JDAD. Swap it in with `update-docker.sh`, which checks the new pair before restarting.
+- **Authenticated Origin Pulls (later):** the origin requires a client certificate that only Cloudflare presents, so even a request from inside Cloudflare's ranges that isn't for this zone is refused. Prefer per-hostname pulls with your own certificate over the zone-level shared Cloudflare certificate. Tracked as its own card; not implemented.
 
 ### Read-only deploy key
 

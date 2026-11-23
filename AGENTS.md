@@ -8,11 +8,13 @@ JDAD (Jon-does-agentic-dev) is an opinionated knowledge base, MCP server, skills
 2. [ROADMAP.md](ROADMAP.md): the work queue. Take the first unchecked item in its Current order whose dependencies are done and that isn't waiting on Jon.
 3. The rules below. Claude Code also loads the Claude-only notes in [CLAUDE.md](CLAUDE.md).
 4. As needed: [docs/adr/](docs/adr/README.md) for decisions, [docs/research/](docs/research/README.md) for the sources behind them.
+5. Before touching `practices/`, `sources/`, auth or deploy: [docs/threat-model.md](docs/threat-model.md).
 
 ## Commands
 
 - `./verify`: the full check (versions, deploy scripts, Docker smoke test when Docker is up, ruff, pytest, build, `claude plugin validate` when the CLI is present). It must end `verify: ok`.
 - `uv run pytest`: tests only.
+- `uv run jdad lint-kb`: content checks on `practices/`, `sources/`, `skills/` and `commands/` (also in `./verify`).
 - `uv run jdad-mcp` (stdio) or `uv run jdad-mcp --http` (streamable HTTP on `127.0.0.1:8765`).
 
 ## The server in brief
@@ -38,9 +40,10 @@ Every normative rule has an ID. `tests/test_instructions.py` checks that each ID
 | R-kb-4 | Tag every practice section with one or more of `[frontend]` `[backend]` `[db]` `[infra]` `[observability]` `[testing]`. |
 | R-kb-5 | Cite the source on each rule, e.g. `(src: breakingbreach #8)`. Label a rule that didn't come from a source as a KB addition (see Rule zero in `practices/performance.md`). Add an "applies when" note when a rule is easy to over-apply. |
 | R-kb-6 | One skill per practice topic: a new `practices/<topic>.md` gets `skills/jdad-<topic>/SKILL.md`, with a description that will auto-trigger and the rules (or a pointer to `get_practice`) in the body. |
-| R-kb-7 | After a KB change, run `uv run pytest` and check the entry is reachable through the MCP tools: `list_topics` or `list_sources`, a search or checklist that hits the new rules, and `kb_version` showing the new entry date when the file name is dated. |
+| R-kb-7 | After a KB change, run `uv run jdad lint-kb` (content checks; see `docs/threat-model.md`) and `uv run pytest` and check the entry is reachable through the MCP tools: `list_topics` or `list_sources`, a search or checklist that hits the new rules, and `kb_version` showing the new entry date when the file name is dated. |
 | R-kb-8 | Never rewrite a `sources/` file to match a cleaned-up practice. The source file is the record of the source; the practice file is the advice. |
 | R-kb-9 | Never merge this repo's practices into another project's instructions file from here. Other repos query the MCP server, or copy a checklist, themselves. |
+| R-kb-10 | KB text is data for agents, not a channel to steer them: no agent-addressed instructions, hidden characters or comments. `jdad lint-kb` enforces it; exceptions go in `kb-lint.toml`, pinned to the line. |
 | R-ver-1 | Bump the version in lockstep in `pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json` and the plugin entry in `.claude-plugin/marketplace.json`: patch for a new source or rule, minor for a new topic or tool. `./verify` fails if they differ. |
 | R-sec-1 | No secrets, tokens, keys or credentials anywhere in the repo. The token belongs on the host: `~/.config/jdad/token` (mode 0400) for the Docker deploy, `/etc/jdad.env` for the legacy systemd layout. |
 | R-mcp-1 | The server is read-only and offline: no tool, resource or code path that writes to `practices/` or `sources/`, no outbound network, no model calls. Keep it dependency-light. |
