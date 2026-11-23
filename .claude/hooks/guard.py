@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import posixpath
 import re
 import shlex
 import signal
@@ -120,7 +121,10 @@ REDIRECT_WORD_RE = re.compile(r"(\d*)(<<<|<<-|<<|<>|<&|>&|&>>|&>|>>|>\||<|>)(.*)
 # Operands that make a shell read its script from stdin.
 STDIN_OPERANDS = {"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"}
 MAX_VARIANTS = 8  # possible values of a word or a command checked; more is denied, never truncated
-FD_OPERAND_RE = re.compile(r"/(?:dev|proc/self)/fd/(\d+)")
+# A descriptor path, after normalising (//dev/./stdin, /proc/<any>/fd/N).
+FD_PATH_RE = re.compile(r"/(?:dev|proc/[^/]+)/fd/(\d+)")
+# Shell options whose value is a separate word (not the script).
+SHELL_VALUE_OPTIONS = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}
 WORD_START = " \t\n;|&("
 
 
@@ -671,7 +675,9 @@ def _stdin_code_argv(words: list[str], producer: list[str] | None, bodies: list[
             k += 1
         k += 1
         if op.startswith((">", "&")):
-            continue  # an output redirection
+            if fd:  # 0>&3, 3>file: that descriptor now holds something the guard can't see
+                sources.setdefault(fd, []).append(("file", ""))
+            continue  # otherwise an output redirection
         fd = fd or "0"
         if op == "<<<":
             sources.setdefault(fd, []).append(("here", target))
@@ -682,23 +688,35 @@ def _stdin_code_argv(words: list[str], producer: list[str] | None, bodies: list[
     rest = _strip_wrappers(rest)
     if not rest or PurePath(rest[0]).name not in SHELLS:
         return [], None
+    # A stdin or descriptor marker anywhere counts, whatever comes before it.
+    # That is stricter than bash ("bash s.sh /dev/stdin" passes it to s.sh as
+    # $1), on purpose: other shells' value-taking options aren't all modelled.
     script_fd: str | None = None
     operand = False
     args, k = rest[1:], 0
     while k < len(args):
         arg = args[k]
-        fd_operand = FD_OPERAND_RE.fullmatch(arg)
         if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg):
             return [], None  # sh -c CODE: checked by _nested_commands
-        if arg in ("-o", "+o", "-O", "+O"):
+        if arg in SHELL_VALUE_OPTIONS:
+            value = args[k + 1] if k + 1 < len(args) else ""
+            if arg in ("--rcfile", "--init-file"):  # the shell runs this file as code too
+                descriptor = _descriptor_operand(value)
+                if descriptor == "?":
+                    return [], "a shell reads code from a device path the guard can't see"
+                if descriptor is not None:
+                    script_fd = script_fd or descriptor
             k += 2
             continue
-        if script_fd is None and not operand and (arg in STDIN_OPERANDS or arg == "-s" or fd_operand):
-            script_fd = fd_operand.group(1) if fd_operand else "0"
-        elif not arg.startswith(("-", "+")) and script_fd is None:
+        descriptor = _descriptor_operand(arg)
+        if descriptor == "?":
+            return [], "a shell reads a script from a device path the guard can't see"
+        if descriptor is not None or arg == "-s":
+            script_fd = script_fd or descriptor or "0"
+        elif not arg.startswith(("-", "+")):
             operand = True  # a script file: a known gap (its text isn't visible)
         k += 1
-    if operand:
+    if operand and script_fd is None:
         return [], None
     fd = script_fd or "0"
     codes: list[str] = []
@@ -717,6 +735,24 @@ def _stdin_code_argv(words: list[str], producer: list[str] | None, bodies: list[
     if fd != "0" and fd not in sources:
         return codes, f"a shell reads code from descriptor {fd}, which the guard can't see"
     return codes, None
+
+
+def _descriptor_operand(arg: str) -> str | None:
+    """The descriptor a script operand reads ("0" for -, /dev/stdin), "?" for
+    any other /dev or /proc path, None for an ordinary file."""
+    if arg in STDIN_OPERANDS:
+        return "0"
+    if not arg.startswith("/"):
+        return None
+    path = posixpath.normpath(re.sub(r"/+", "/", arg)).lower()
+    if path == "/dev/stdin":
+        return "0"
+    match = FD_PATH_RE.fullmatch(path)
+    if match:
+        return match.group(1)
+    if path.startswith(("/dev/", "/proc/")):
+        return "?"
+    return None
 
 
 def _token_reason(raw_word: str, lister: bool, redirect: bool) -> str | None:
