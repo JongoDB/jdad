@@ -15,16 +15,19 @@ through leading VAR=value assignments (their values are checked too),
 ( ) subshells, { } groups, if/for/while/case bodies, wrapper options
 that take a value (sudo -u USER), backslash-newline continuations, GNU
 long-option prefixes (rm --rec --forc), variables the command itself
-assigns or defaults ("F=-rf; rm $F", "rm ${F:--rf}"), and every input
-a shell gets, treated as code it may run: here-strings and heredocs on
-any descriptor, and echo/printf text piped in. Which descriptor a shell
-reads its script from isn't modelled (it depends on -s, option clusters,
---rcfile and paths), so any input the guard can't see is denied: a file
-or duplicated descriptor, another program's output piped in, a script
-or rc file under dev/ or proc/. So is printf or echo text with escapes
-or a format that's run as code (the guard doesn't decode it). Every value a variable is given counts, and
-${NAME+word} on a variable the command doesn't set may be word. Secret
-names are matched case-insensitively (.ENV is .env on macOS).
+assigns with NAME=value or export/local/declare/typeset/readonly, or
+defaults ("F=-rf; rm $F", "rm ${F:--rf}"), and the input a shell program
+(sh, bash, zsh, dash, ksh) gets, treated as code it may run:
+here-strings and heredocs on any descriptor, and echo/printf text piped
+in. Which descriptor such a shell reads its script from isn't modelled
+(it depends on -s, option clusters, --rcfile and paths), so any input
+the guard can't see is denied: a file or duplicated descriptor, another
+program's output piped in, a script or rc file under dev/ or proc/. So
+is printf or echo text with escapes or a format that's run as code (the
+guard doesn't decode it). Every value such an assignment gives a
+variable counts, and ${NAME+word} on a variable the command doesn't set
+may be word. Secret names are matched case-insensitively (.ENV is .env
+on macOS).
 
 It is not a sandbox, and it does NOT catch (tested as known gaps):
 - code that never appears as shell text: interpreters (python -c
@@ -33,6 +36,12 @@ It is not a sandbox, and it does NOT catch (tested as known gaps):
 - other destructive commands outside the deny list (find -delete, git
   reset --hard, git clean -fdx, branch deletion with git push origin
   :main, --delete or -d);
+- shell forms it doesn't model (JON-1357): $'...' quoting, brace
+  expansion ({rm,-rf,x}), words spliced from parts (r$(true)m,
+  `echo rm`); variables set by IFS splitting, set -- / "$@", printf -v,
+  read or mapfile; code run by source or . (of <(...) or /dev/stdin),
+  env -S, trap, PROMPT_COMMAND or BASH_ENV; eval of decoded text; an
+  abbreviated --mirror (git push --mirr);
 - secret files outside the list above (*.key, *.p12, credentials.json);
 - Grep or Glob over a whole directory that contains secret files.
 Reads the hook's stdin JSON
@@ -504,8 +513,10 @@ def _push_reason(args: list[str]) -> str | None:
 
 
 def _reference_values(match: re.Match, variables: dict[str, list[str]]) -> list[str]:
-    """What one $NAME / ${NAME<op>word} can expand to. Every value the command
-    gives the variable counts (order isn't tracked). For a variable the
+    """What one $NAME / ${NAME<op>word} can expand to. Every value the command's
+    NAME=value and export/local/declare/typeset/readonly assignments
+    give the variable counts (order isn't tracked; values set by read,
+    mapfile, printf -v, set -- or IFS splitting aren't seen: JON-1357). For a variable the
     command doesn't set, the environment may set it: ${NAME+word} may be
     word, and ${NAME:-word} is word when it's unset."""
     name = match.group(1) or match.group(4)
@@ -661,7 +672,8 @@ def _stdin_code(words: list[str], producer: list[str] | None, bodies: list[str],
 
 def _stdin_code_argv(words: list[str], producer: list[str] | None, bodies: list[str],
                      variables: dict[str, list[str]]) -> tuple[list[str], str | None]:
-    """Every input a shell gets is treated as code it may run, wherever the
+    """Every input a shell program (SHELLS) gets is treated as code it may run
+    (source and . aren't shell programs here: JON-1357), wherever the
     redirection is and whichever descriptor it's on: which descriptor a
     shell reads its script from depends on options (-s, clusters, --rcfile)
     and paths the guard can't model reliably, so it doesn't try. Here-strings,
