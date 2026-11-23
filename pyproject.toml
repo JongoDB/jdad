@@ -13,6 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
+jdad = "jdad.cli:main"
 jdad-mcp = "jdad.server:main"
 
 [dependency-groups]
