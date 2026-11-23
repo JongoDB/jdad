@@ -451,6 +451,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Serve Streamable HTTP instead of stdio.",
     )
     parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Load every KB file through the tools' read paths, report problems, and exit (0 = servable).",
+    )
+    parser.add_argument(
         "--host",
         default="127.0.0.1",
         help="HTTP bind host (default: 127.0.0.1).",
@@ -502,6 +507,10 @@ def resolve_ssl_files(
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    if args.check:
+        from jdad.check import run_check
+
+        raise SystemExit(run_check())
     if args.http:
         import uvicorn
 
