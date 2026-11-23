@@ -1,0 +1,29 @@
+# Public checks from Daisy's box, 2026-11-22 2:43:18 PM EST
+
+$ curl -sS -i https://jdad-mcp.jondevs.com/healthz
+HTTP/2 200 
+date: Sun, 22 Nov 2026 19:43:18 GMT
+content-type: application/json
+content-length: 15
+server: cloudflare
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+cf-cache-status: DYNAMIC
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=2vxJA1zKq1yqOFqPBxKCXWpncfjqUhy5tDu0hGkB4hm%2BwdOP7LUF%2FIQEj1F%2B8OiYr%2BUwiq2cR%2BYI7b6z0E1bWOu4qicfSkAPJ7wjfT5EJPe4Q7oGyQvIZyU5upgVJ0Yt8EI8nyHPgxPjaO2ocUSKJdLRkQ%3D%3D"}]}
+cf-ray: a5ea6c1ed9db70b9-PDX
+alt-svc: h3=":443"; ma=86400
+
+{"status":"ok"}
+
+$ curl -sS -i https://jdad-mcp.jondevs.com/mcp
+HTTP/2 401 
+date: Sun, 22 Nov 2026 19:43:19 GMT
+content-type: application/json
+content-length: 24
+server: cloudflare
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+cf-cache-status: DYNAMIC
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=bRJh1hYYZLtS7yQ74FnCLhhxzRRQAqKq3rZo%2BNmBVOicnouDSY1GCBfZWFPJBeY3bF%2B6lOl8ckBEgve9zYaB4CpePegpioGw8tMQzXjsxPL1rh0A4Jl399cdm%2BSRztGooa7zVtsyE%2F35ij2CDt8D6LOftw%3D%3D"}]}
+cf-ray: a5ea6c1fd9bb0ccf-PDX
+alt-svc: h3=":443"; ma=86400
+
+{"error":"unauthorized"}
