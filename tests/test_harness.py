@@ -198,6 +198,14 @@ def test_guard_allows(event: dict) -> None:
         bash("nice -n 5 rm -rf build"),
         bash("timeout -s KILL 5 git push -f"),
         bash("find . | xargs -I{} rm -rf {}"),
+        # review of the batch-3 fix
+        bash("find . | xargs -i rm -rf {}"),  # -i's value is attached, never the next word
+        bash("find . | xargs -l rm -rf"),
+        bash("function f { rm -rf build; }"),
+        bash("sudo -nu root rm -rf build"),  # clustered short options ending in a value option
+        bash("timeout 1.5 rm -rf build"),
+        bash("timeout 1.5s git push -f"),
+        bash("env -- rm -rf build"),
         # sixth review round
         bash("echo a\\ # ; rm -rf build"),  # "#" after an escaped space isn't a comment
         bash("cat <<\"E\\OF\"\nEOF\nrm -rf build\nE\\OF"),  # backslash in a quoted delimiter: deny
