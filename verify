@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 echo "==> bash -n deploy scripts"
-for script in deploy/common.sh deploy/install.sh deploy/update.sh deploy/update-docker.sh deploy/firewall-cloudflare.sh; do
+for script in deploy/common.sh deploy/install.sh deploy/update.sh deploy/update-docker.sh deploy/firewall-cloudflare.sh deploy/migrate-token.sh; do
   bash -n "$script"
 done
 
@@ -18,6 +18,9 @@ uv run --frozen python tests/check_versions.py
 
 echo "==> deploy invocation and token parsing"
 bash tests/test_deploy_invocation.sh
+
+echo "==> token file migration"
+bash tests/test_migrate_token.sh
 
 echo "==> git checkout detection (clone and worktree)"
 bash tests/test_git_checkout.sh
