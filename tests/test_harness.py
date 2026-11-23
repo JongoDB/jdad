@@ -483,6 +483,13 @@ BATCH10_DENY = [
     "bash ../../../dev/fd/3",
     # deliberate: a script's own stdin isn't seen, so input to a shell script is denied
     "bash x.sh < data.txt",
+    # automated security review of df60e75: code-running wrappers
+    "watch -d 'rm -rf x'",  # -d's value is optional, so the code isn't its value
+    "watch -d -n 5 'git push --force'",
+    "flock /tmp/l -c'rm -rf x'",  # attached
+    "flock -o /tmp/l -oc 'rm -rf x'",  # in a cluster
+    "flock /tmp/l --comm 'rm -rf x'",  # abbreviated
+    "flock /tmp/l --command='rm -rf x'",
     # known gaps until batch 10, now caught (variables and stdin shells are followed)
     "X=rm; $X -rf build",
     "cmd='rm -rf build'; eval \"$cmd\"",
@@ -520,6 +527,8 @@ def test_batch10_bypasses_are_denied(command: str) -> None:
         bash("ls \\\nsrc"),
         bash("watch -n 5 'uv run pytest -q'"),
         bash("flock /tmp/l uv run pytest"),
+        bash("flock /tmp/l -c 'uv run pytest -q'"),
+        bash("watch -d -n 5 'uv run pytest -q'"),
         bash("echo $(echo hello)"),
         bash("git log --oneline | head -5"),
         bash("rm --recursive build"),

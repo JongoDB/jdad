@@ -624,21 +624,25 @@ def _as_code(text: str, variables: dict[str, list[str]]) -> list[str]:
 
 
 def _wrapper_code(wrapper: str, args: list[str]) -> list[str]:
-    """Shell code a code-running wrapper passes to sh -c."""
+    """Shell code a code-running wrapper passes to sh -c. Option parsing is
+    not trusted (optional values, clusters, abbreviations), so this errs
+    toward checking more words as code."""
     if wrapper == "flock":
+        codes: list[str] = []
         for index, arg in enumerate(args):
-            if arg in ("-c", "--command") and index + 1 < len(args):
-                return [args[index + 1]]
-            if arg.startswith("--command="):
-                return [arg.split("=", 1)[1]]
-        return []
-    takes_value = WRAPPER_VALUE_OPTIONS.get(wrapper, set())
-    while args and args[0].startswith("-"):
-        if args[0] == "--":
-            args = args[1:]
-            break
-        args = args[2:] if args[0] in takes_value else args[1:]
-    return [" ".join(args)] if args else []
+            following = args[index + 1] if index + 1 < len(args) else ""
+            if arg.startswith("--"):
+                name, eq, value = arg.partition("=")
+                if len(name) > 2 and "--command".startswith(name):  # --command, --comm, --c...
+                    codes.append(value if eq else following)
+            elif arg.startswith("-"):
+                cluster = re.match(r"-[A-Za-z]*?c(.*)", arg, re.DOTALL)  # -c, -oc, -c'code'
+                if cluster:
+                    codes.append(cluster.group(1) or following)
+        return [code for code in codes if code]
+    # watch joins its operands into one command; any word could be where
+    # the code starts once an option with an optional value (-d) is misread.
+    return [" ".join(args[i:]) for i in range(len(args)) if not args[i].startswith("-")]
 
 
 def _stdin_code(words: list[str], producer: list[str] | None, bodies: list[str],
