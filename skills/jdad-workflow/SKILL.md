@@ -1,6 +1,8 @@
 ---
 name: jdad-workflow
 description: Use when setting up or running coding agents on a repo, or planning, verifying, reviewing or handing off agent work - instruction files (AGENTS.md, CLAUDE.md), specs and done-criteria, pass/fail checks, evaluator or reviewer agents, progress notes and session handoffs, hooks and deny rules, worktrees, unattended runs, and keeping a harness current. Applies Jon's JDAD agentic-workflow checklist.
+metadata:
+  generated: jdad build from catalog/skills/jdad-workflow/SKILL.md; do not edit
 ---
 
 # JDAD agentic workflow

@@ -58,10 +58,15 @@ def test_search_finds_workflow_rules(kb: KnowledgeBase) -> None:
 
 
 def test_workflow_skill_mirrors_the_practice_rules() -> None:
-    """Until both stacks meet and `jdad build` (P1.5) generates it, the hand copy must match."""
+    """The skill's rules are a hand-written copy of the practice file's (in
+    catalog/, compiled into skills/ by `jdad build`), so they must match.
+    Frontmatter is skipped: its indented lines (`  generated: ...`) aren't rules."""
 
     def rule_lines(path: Path) -> list[str]:
-        return [line for line in path.read_text().splitlines() if line.startswith(("- ", "  ", "## "))]
+        lines = path.read_text().splitlines()
+        if lines and lines[0] == "---":
+            lines = lines[lines.index("---", 1) + 1 :]
+        return [line for line in lines if line.startswith(("- ", "  ", "## "))]
 
     assert rule_lines(REPO_ROOT / "skills/jdad-workflow/SKILL.md") == rule_lines(
         REPO_ROOT / "practices/agentic-workflow.md"
