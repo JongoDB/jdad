@@ -427,6 +427,22 @@ BATCH10_DENY = [
     "git push -uf origin main",
     # read through a case-insensitive file system
     "cat .ENV",
+    # automated security review of 1cc6e8f
+    ">/dev/null rm -rf x",  # a redirection before the program
+    "2>&1 git push -f",
+    "<<<'rm -rf x' bash",
+    "bash 0<<<'rm -rf x'",
+    "echo 'rm -rf x' | bash /dev/stdin",
+    "echo 'rm -rf x' | bash -",
+    "bash /dev/fd/0 <<< 'rm -rf x'",
+    "printf 'r\\x6d -rf x' | bash",  # escapes the guard can't decode, fed to a shell
+    "echo -e 'r\\x6d -rf x' | sh",
+    "printf '%s -rf x' rm | bash",
+    "bash -c \"$(printf 'r\\155 -rf x')\"",
+    "F=-rf; rm $F x; F=-v",  # every value a variable is given counts
+    "X=rm; $X -rf build; X=ls",
+    "rm ${HOME:+-rf} x",  # an unset-by-us variable may be set: check the alternate word
+    "git push ${UPSTREAM+--force}",
     # known gaps until batch 10, now caught (variables and stdin shells are followed)
     "X=rm; $X -rf build",
     "cmd='rm -rf build'; eval \"$cmd\"",
@@ -468,6 +484,11 @@ def test_batch10_bypasses_are_denied(command: str) -> None:
         bash("git log --oneline | head -5"),
         bash("rm --recursive build"),
         bash("rm --verbose --force x.txt"),
+        bash(">/dev/null uv run pytest -q"),
+        bash("2>&1 git push origin feat/x | tail -1"),
+        bash("printf '%s\\n' a b | sort"),  # escapes are fine when no shell runs the output
+        bash("F=-r; rm $F build; F=-v"),
+        bash("rm ${HOME:+-r} build"),
         # message text mentioning a ${VAR:-default} stays one word (found by dogfooding)
         bash('git commit -q -m "docs: ${F:--rf} expands; f=.env; cat $f is denied"'),
         bash('gh pr comment 1 --body "rm ${FLAGS:--rf} x and cat .env are now denied"'),
