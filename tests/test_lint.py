@@ -19,7 +19,7 @@ from jdad.lint import lint_kb
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
-CLEAN_PRACTICE = "# Clean\nRule zero (KB addition): measure first.\n## Backend [backend]\n- Paginate every list endpoint. (src: x #1)\n"
+CLEAN_PRACTICE = "# Clean\nIntro prose.\n## Backend [backend]\n- Paginate every list endpoint. (src: x #1) {#clean.backend.paginate}\n"
 
 
 def make_kb(root: Path, files: dict[str, str | bytes]) -> Path:
@@ -36,8 +36,12 @@ def make_kb(root: Path, files: dict[str, str | bytes]) -> Path:
     return root
 
 
+STRUCTURE_CHECKS = {"tag", "rule-id", "citation", "rule-format"}
+
+
 def checks(root: Path) -> list[tuple[str, str, int]]:
-    return [(f.check, f.path, f.line) for f in lint_kb(root)]
+    """Content-check findings only; structure checks are tested in test_kb_schema.py."""
+    return [(f.check, f.path, f.line) for f in lint_kb(root) if f.check not in STRUCTURE_CHECKS]
 
 
 def test_repo_kb_is_clean() -> None:

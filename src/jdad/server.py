@@ -54,7 +54,8 @@ def list_topics() -> list[dict[str, Any]]:
 
 @mcp.tool(annotations=READ_ONLY)
 def search_practices(query: str, tag: str | None = None) -> list[dict[str, Any]]:
-    """Keyword search over practice sections, returning matched file, heading, and body.
+    """Keyword search over practice sections: matched file, heading, body, and the section's rules
+    (each with id, text, tags, citation, origin, applies_when).
 
     Optional tag filter: frontend, backend, db, infra, observability, or testing.
     """
@@ -92,7 +93,7 @@ def get_source(id: str) -> str:
 
 @mcp.tool(annotations=READ_ONLY)
 def get_checklist(tags: list[str]) -> str:
-    """Return bullet rules filtered by tags, ready to paste into a plan.
+    """Return rules filtered by tags, one line each (`- <id>: <text> (<citation>)`), ready to paste into a plan.
 
     Tags: frontend, backend, db, infra, observability, testing. An empty list returns every rule.
     """
