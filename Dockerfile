@@ -27,6 +27,10 @@ FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb
 
 ARG JDAD_GIT_SHA=unknown
 ENV JDAD_GIT_SHA=$JDAD_GIT_SHA
+# This image reads the token from JDAD_TOKEN_FILE. update-docker.sh checks the
+# label before a rollback: images without it read only JDAD_TOKEN and need
+# deploy/compose.legacy-token.yml to start.
+LABEL io.jdad.token-file="1"
 
 RUN useradd --system --user-group --uid 999 --create-home --home-dir /app \
     --shell /usr/sbin/nologin jdad \
