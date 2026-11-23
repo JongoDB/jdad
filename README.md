@@ -60,7 +60,7 @@ jdad-mcp --http
 
 `KB_ROOT` overrides the content directory. It must point at a directory that contains `practices/` and `sources/`. If unset, the server uses the jdad checkout it runs from (an editable install), otherwise the files bundled in the package. It never looks in the current directory, so a server started inside another project can't serve that project's files as the KB.
 
-`JDAD_TOKEN` is optional on loopback. When set, every HTTP path except `/healthz` requires `Authorization: Bearer <token>`. Stdio does not use the token. The Docker deploy binds `0.0.0.0`, so a non-empty token is required (the image does not pass `--allow-no-auth`). Store the value in `~/.config/jdad/jdad.env` (mode 0600) on the droplet; never commit it. `JDAD_ALLOWED_HOSTS` is a comma-separated list of public hostnames the MCP transport will accept in the `Host` header (loopback is always allowed; DNS-rebinding protection stays on). For this host it is `jdad-mcp.jondevs.com`, which also allows Origin `https://jdad-mcp.jondevs.com` because Cloudflare forwards the original Host header.
+`JDAD_TOKEN` is optional on loopback. When set, every HTTP path except `/healthz` requires `Authorization: Bearer <token>`. Stdio does not use the token. The Docker deploy binds `0.0.0.0`, so a non-empty token is required (the image does not pass `--allow-no-auth`). `JDAD_TOKEN_FILE` names a file holding only the token (it must not be readable by group or others); the server reads it once at startup and refuses to start if both `JDAD_TOKEN` and `JDAD_TOKEN_FILE` are set. The Docker deploy uses the file, `~/.config/jdad/token` (mode 0400) on the droplet, mounted as a compose secret, so the value never appears in the container environment or `docker inspect`. Never commit it. `JDAD_ALLOWED_HOSTS` is a comma-separated list of public hostnames the MCP transport will accept in the `Host` header (loopback is always allowed; DNS-rebinding protection stays on). For this host it is `jdad-mcp.jondevs.com`, which also allows Origin `https://jdad-mcp.jondevs.com` because Cloudflare forwards the original Host header.
 
 The default HTTP bind is `127.0.0.1`. Binding to a non-loopback address (`0.0.0.0`, a public IP, or a hostname other than `localhost`) without `JDAD_TOKEN` refuses to start unless you pass `--allow-no-auth`, which logs a loud warning.
 
@@ -261,7 +261,15 @@ The checkout on the droplet pulls this private repo as the deploy user (no passw
 
 ### Token and first install
 
-Generate the bearer token straight into the env file; never echo it. To rotate, write a new token the same way, run `./deploy/update-docker.sh`, then update every client. The previous token stops working immediately.
+Generate the bearer token straight into its own file; never echo it. The token file is mounted into the container as a compose secret and read once at startup, so it isn't visible through `docker inspect` the way an environment variable is.
+
+To rotate: write a new token over the file the same way (`chmod 600` it first if it is 0400, then back to 0400), restart the container with `docker compose -p jdad -f deploy/docker-compose.yml restart jdad` (no rebuild needed) or `./deploy/update-docker.sh`, then update every client. The previous token stops working at the restart.
+
+**Upgrading an older deploy** that keeps `JDAD_TOKEN` in `~/.config/jdad/jdad.env`: run `./deploy/migrate-token.sh` once (it moves the value into `~/.config/jdad/token` at mode 0400 without printing it, checks the copy, and deletes the line from the env file), then `./deploy/update-docker.sh`. `update-docker.sh` refuses to run while the env file still sets `JDAD_TOKEN`.
+
+**Rolling back across the migration.** Images built before the token file read only `JDAD_TOKEN`. Every image from this release on carries the label `io.jdad.token-file=1`. When `update-docker.sh` rolls back to an image without it (for example, the first update after migrating fails its health check), it adds `deploy/compose.legacy-token.yml` and passes the token from `~/.config/jdad/token` as `JDAD_TOKEN` for that container only. The log says "predates the token file". The value is read inside the script, never on a command line, but it is in that container's environment (`docker inspect`), as it was before the migration. The next successful deploy recreates the container without it. `tests/test_docker.sh` covers this with a stand-in image; `JDAD_TEST_LEGACY_REF=<ref>` runs the same test against the real image built from that commit.
+
+To undo the migration by hand instead (stay on an old commit for good): check out the old commit; put `JDAD_TOKEN=` plus the value from the token file back into `jdad.env` without echoing it (for example `{ printf 'JDAD_TOKEN='; cat ~/.config/jdad/token; } >> ~/.config/jdad/jdad.env`); then run the old commit's `update-docker.sh`. Delete the token file only once that deploy is healthy.
 
 Use a dedicated **non-root** deploy user in the `docker` group (on a fresh DigitalOcean droplet you log in as root; create the user first, for example `adduser deploy && usermod -aG docker deploy`). The container runs as the deploy user's uid, and `update-docker.sh` refuses to run with `JDAD_UID=0`.
 
@@ -272,27 +280,26 @@ cd jdad
 
 umask 077
 mkdir -p ~/.config/jdad
-{
-  printf 'JDAD_TOKEN='
-  openssl rand -hex 32
-  printf 'JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com\n'
-} > ~/.config/jdad/jdad.env
+openssl rand -hex 32 > ~/.config/jdad/token
+chmod 400 ~/.config/jdad/token
+printf 'JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com\n' > ~/.config/jdad/jdad.env
 chmod 600 ~/.config/jdad/jdad.env
-# do not commit this file
+# do not commit either file
 
 # Origin cert and key must already be in ~/.config/jdad/tls/ as above
 export JDAD_GIT_SHA="$(git rev-parse HEAD)"
 export JDAD_UID="$(id -u)"
 export JDAD_GID="$(id -g)"
 docker compose -f deploy/docker-compose.yml up -d --build
-# Local probe uses -k because the Origin CA is not in the public trust
-# store and the URL is 127.0.0.1, not the certificate hostname.
-curl -fsSk https://127.0.0.1/healthz
+# Local probe: connect to 127.0.0.1, verify the origin certificate for the
+# public name, trusting only that certificate (no -k).
+curl -fsS --cacert ~/.config/jdad/tls/origin.crt \
+  --resolve jdad-mcp.jondevs.com:443:127.0.0.1 https://jdad-mcp.jondevs.com/healthz
 ```
 
-> **Warning:** `docker compose -f deploy/docker-compose.yml config` prints the fully expanded config, including `JDAD_TOKEN` from the env file. Don't paste its output into chats, tickets, PRs or logs. To check the file without values, use `docker compose -f deploy/docker-compose.yml config --quiet` (exit code only).
+> **Warning:** `docker compose -f deploy/docker-compose.yml config` prints the fully expanded config, including everything in the env file (and `JDAD_TOKEN`, on a deploy that hasn't been migrated to the token file). Don't paste its output into chats, tickets, PRs or logs. To check the file without values, use `docker compose -f deploy/docker-compose.yml config --quiet` (exit code only).
 
-`deploy/docker-compose.yml` uses the project name `jdad` (so this first install and `update-docker.sh` are the same compose project), builds from the repo with `JDAD_GIT_SHA` baked into the image, publishes `443:8443`, restarts unless stopped, reads `~/.config/jdad/jdad.env`, mounts `~/.config/jdad/tls/` read-only, sets `JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com` (Origin `https://jdad-mcp.jondevs.com` is also allowed), and runs with a read-only root filesystem, `tmpfs` on `/tmp`, `cap_drop: [ALL]`, and `no-new-privileges`. The container process runs as the deploy user's uid so it can read a `0600` key. It binds `0.0.0.0:8443` with TLS, so it will refuse to start without `JDAD_TOKEN`. `--allow-no-auth` is not used.
+`deploy/docker-compose.yml` uses the project name `jdad` (so this first install and `update-docker.sh` are the same compose project), builds from the repo with `JDAD_GIT_SHA` baked into the image, publishes `443:8443`, restarts unless stopped, reads `~/.config/jdad/jdad.env`, mounts `~/.config/jdad/token` as the secret `/run/secrets/jdad_token` (`JDAD_TOKEN_FILE`), mounts `~/.config/jdad/tls/` read-only, sets `JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com` (Origin `https://jdad-mcp.jondevs.com` is also allowed), and runs with a read-only root filesystem, `tmpfs` on `/tmp`, `cap_drop: [ALL]`, and `no-new-privileges`. The container process runs as the deploy user's uid so it can read a `0600` key and the `0400` token file. It binds `0.0.0.0:8443` with TLS, so it will refuse to start without a token. `--allow-no-auth` is not used.
 
 `jdad-mcp` also accepts `--ssl-certfile` / `--ssl-keyfile`, or `JDAD_SSL_CERTFILE` / `JDAD_SSL_KEYFILE`.
 
@@ -302,7 +309,7 @@ Later updates (idempotent; fails loudly; rolls back to the previous image if hea
 ./deploy/update-docker.sh
 ```
 
-Before touching the running container it checks that the env file has a non-empty `JDAD_TOKEN`, that the certificate is a readable, unexpired PEM whose public key matches the private key (`openssl x509 -pubkey` vs `openssl pkey -pubout`), that the key isn't world-readable, and that `JDAD_UID` isn't 0. Then it sets `JDAD_GIT_SHA` from `git rev-parse HEAD`, does `git pull --ff-only`, `docker compose up -d --build`, and curls `https://127.0.0.1:<published port>/healthz` (443 in production), requiring `{"status":"ok"}`. After a healthy update it prunes old `jdad:<sha>` images, keeping the current one and the previous one (also tagged `jdad:previous`) for rollback.
+Before touching the running container it checks that `JDAD_UID` isn't 0; that the token file exists, isn't a symlink, is owned by the deploy uid, has no group or other permission bits and isn't empty; that the env file exists and no longer sets `JDAD_TOKEN`; that the certificate is a readable, unexpired PEM whose public key matches the private key (`openssl x509 -pubkey` vs `openssl pkey -pubout`); and that the key has no group or other permission bits. Then it sets `JDAD_GIT_SHA` from `git rev-parse HEAD`, does `git pull --ff-only`, `docker compose up -d --build`, and probes `/healthz` on the published port (443 in production) with `curl --cacert <origin.crt> --resolve jdad-mcp.jondevs.com:<port>:127.0.0.1`: the origin certificate must verify for the public name (no `-k`), and the body must be `{"status":"ok"}`. A wrong, expired or mismatched certificate fails the update and triggers the rollback. A rollback to an image from before the token file gets `JDAD_TOKEN` from the token file (see "Rolling back across the migration"). `JDAD_HEALTH_HOST` overrides the name. After a healthy update it prunes old `jdad:<sha>` images, keeping the current one and the previous one (also tagged `jdad:previous`) for rollback.
 
 `JDAD_ALLOWED_HOSTS` entries are lowercased, and wildcard entries such as `*` or `*.jondevs.com` are rejected at startup. Public hosts get `https://` origins only; `http://` origins are allowed for loopback.
 
@@ -316,7 +323,7 @@ This is not how the DigitalOcean droplet is run. `deploy/install.sh` remains for
 - create `/var/lib/jdad/.ssh` at mode `0700` and install `deploy/ssh-config.example` as `/var/lib/jdad/.ssh/config` (mode `0600`) if that file is missing
 - clone the repo into `/opt/jdad` as that user (`sudo -u jdad git clone`), and `chown` the checkout to `jdad` if it already exists. The home directory is outside the checkout, so a deploy key in `/var/lib/jdad/.ssh` does not make `/opt/jdad` non-empty, and the uv cache lands in `/var/lib/jdad/.cache` rather than in the KB tree
 - run `uv sync --frozen --no-dev` as `jdad` with `HOME=/var/lib/jdad` and `UV_PYTHON_PREFERENCE=only-system`, so the venv is `/opt/jdad/.venv` (not under `/root` or `/home`)
-- install `/etc/jdad.env` at mode `0600` with the `JDAD_TOKEN=` placeholder only, and leave an existing env file alone
+- install `/etc/jdad.env` at mode `0600` from `deploy/jdad.env.example` (no token; add a `JDAD_TOKEN=` line yourself, or point `JDAD_TOKEN_FILE` at a 0400 file), and leave an existing env file alone
 - install and `enable` the systemd unit. It starts the service only when `JDAD_TOKEN` is a non-empty value (not `JDAD_TOKEN=` or `JDAD_TOKEN=""`); otherwise it prints the command to start after you fill in the token
 
 The `jdad` user needs git access to this private repo. `sudo -u jdad` has no SSH agent, so use a deploy key and an ssh config entry, not a forwarded agent. The key and `known_hosts` have to exist before the first successful clone, but `install -o jdad` needs the user first. Use this bootstrap order:

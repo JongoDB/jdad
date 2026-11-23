@@ -6,6 +6,8 @@ import argparse
 import hmac
 import logging
 import os
+import stat
+from pathlib import Path
 from typing import Any
 
 from mcp.server import MCPServer
@@ -146,8 +148,54 @@ def normalize_secret(raw: str | None) -> str:
     return text
 
 
+class TokenConfigError(ValueError):
+    """The bearer token configuration is unusable. Messages never include the token."""
+
+
+def resolve_token() -> str:
+    """The bearer token, or "" for none.
+
+    ``JDAD_TOKEN_FILE`` (a file holding only the token, readable by this
+    process and by nobody in its group or others) is the deploy path: the
+    value stays out of the container environment and ``docker inspect``.
+    ``JDAD_TOKEN`` still works when no file is configured. Setting both is
+    an error, so a half-finished migration fails loudly instead of quietly
+    using the old value.
+    """
+    env_token = normalize_secret(os.environ.get("JDAD_TOKEN"))
+    path_text = (os.environ.get("JDAD_TOKEN_FILE") or "").strip()
+    if not path_text:
+        return env_token
+    if env_token:
+        raise TokenConfigError(
+            "both JDAD_TOKEN and JDAD_TOKEN_FILE are set; remove JDAD_TOKEN from the "
+            "environment (see deploy/migrate-token.sh)"
+        )
+    path = Path(path_text)
+    try:
+        mode = path.stat().st_mode
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise TokenConfigError(
+            f"cannot read JDAD_TOKEN_FILE {path_text}: {exc.strerror or exc.__class__.__name__}"
+        ) from None
+    except UnicodeDecodeError:
+        raise TokenConfigError(f"JDAD_TOKEN_FILE {path_text} is not UTF-8 text") from None
+    if not stat.S_ISREG(mode):
+        raise TokenConfigError(f"JDAD_TOKEN_FILE {path_text} is not a regular file")
+    if mode & 0o077:
+        raise TokenConfigError(
+            f"JDAD_TOKEN_FILE {path_text} is readable by group or others "
+            f"(mode {stat.S_IMODE(mode):o}); chmod 400"
+        )
+    token = normalize_secret(raw)
+    if not token:
+        raise TokenConfigError(f"JDAD_TOKEN_FILE {path_text} is empty")
+    return token
+
+
 def _configured_token() -> str:
-    return normalize_secret(os.environ.get("JDAD_TOKEN"))
+    return resolve_token()
 
 
 def _bearer_token(header: str | None) -> str | None:
@@ -169,13 +217,16 @@ def _tokens_match(provided: str, expected: str) -> bool:
 
 
 class BearerAuthMiddleware:
-    """Require Authorization: Bearer $JDAD_TOKEN when the env var is set.
+    """Require Authorization: Bearer <token> when a token is configured.
 
-    /healthz is always open. If JDAD_TOKEN is unset or empty, no auth is required.
+    The token comes from JDAD_TOKEN_FILE or JDAD_TOKEN, resolved once when the
+    app is built (see resolve_token). /healthz is always open. With no token,
+    no auth is required.
     """
 
-    def __init__(self, app: Any) -> None:
+    def __init__(self, app: Any, token: str | None = None) -> None:
         self.app = app
+        self.token = resolve_token() if token is None else normalize_secret(token)
 
     async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
         if scope["type"] != "http":
@@ -185,7 +236,7 @@ class BearerAuthMiddleware:
         if path.rstrip("/") == "/healthz":
             await self.app(scope, receive, send)
             return
-        expected = _configured_token()
+        expected = self.token
         if not expected:
             await self.app(scope, receive, send)
             return
@@ -363,11 +414,14 @@ class HostAllowlistMiddleware:
         await self.app(scope, receive, send)
 
 
-def create_http_app():
-    """Starlette app for streamable HTTP, with optional bearer auth and /healthz."""
+def create_http_app(token: str | None = None):
+    """Starlette app for streamable HTTP, with optional bearer auth and /healthz.
+
+    ``token`` is the already-resolved bearer token; None resolves it now.
+    """
     security = transport_security_settings()
     app = mcp.streamable_http_app(transport_security=security)
-    app.add_middleware(BearerAuthMiddleware)
+    app.add_middleware(BearerAuthMiddleware, token=resolve_token() if token is None else token)
     # Added last, so it is the outermost layer and runs before auth.
     app.add_middleware(HostAllowlistMiddleware, allowed_hosts=security.allowed_hosts)
     return app
@@ -438,7 +492,11 @@ def main(argv: list[str] | None = None) -> None:
     if args.http:
         import uvicorn
 
-        check_http_bind(args.host, allow_no_auth=args.allow_no_auth)
+        try:
+            token = resolve_token()
+        except TokenConfigError as exc:
+            raise SystemExit(f"jdad-mcp: {exc}") from None
+        check_http_bind(args.host, allow_no_auth=args.allow_no_auth, token=token)
         try:
             parse_allowed_hosts()
         except AllowedHostsError as exc:
@@ -448,7 +506,7 @@ def main(argv: list[str] | None = None) -> None:
         if cert and key:
             run_kw["ssl_certfile"] = cert
             run_kw["ssl_keyfile"] = key
-        uvicorn.run(create_http_app(), **run_kw)
+        uvicorn.run(create_http_app(token), **run_kw)
     else:
         mcp.run()
 

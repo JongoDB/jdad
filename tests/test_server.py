@@ -704,3 +704,101 @@ def test_missing_host_is_rejected(kb_root: Path) -> None:
     assert host_is_allowed("127.0.0.1:1", ["127.0.0.1:*"])
     assert not host_is_allowed("127.0.0.1", ["127.0.0.1:*"])
     assert not host_is_allowed("127.0.0.1.evil.example:1", ["127.0.0.1:*"])
+
+
+def _token_file(tmp_path: Path, content: str, mode: int = 0o400) -> Path:
+    path = tmp_path / "token"
+    path.write_text(content)
+    path.chmod(mode)
+    return path
+
+
+def test_token_file_is_used_and_env_token_is_not_needed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kb_root: Path
+) -> None:
+    from jdad.server import resolve_token
+
+    token = "file-token-not-a-secret"
+    monkeypatch.setenv("JDAD_TOKEN_FILE", str(_token_file(tmp_path, token + "\n")))
+    assert resolve_token() == token
+    headers, payload = _mcp_initialize(token)
+    server = _HttpServer(_free_port())
+    server.start()
+    try:
+        ok = httpx2.post(f"{server.base}/mcp", headers=headers, json=payload, timeout=5)
+        assert ok.status_code == 200
+        wrong = httpx2.post(
+            f"{server.base}/mcp",
+            headers={**headers, "Authorization": "Bearer wrong"},
+            json=payload,
+            timeout=5,
+        )
+        assert wrong.status_code == 401
+    finally:
+        server.stop()
+
+
+@pytest.mark.parametrize(
+    ("content", "mode", "message"),
+    [
+        ("", 0o400, "is empty"),
+        ('""\n', 0o600, "is empty"),
+        ("tok", 0o440, "readable by group or others"),
+        ("tok", 0o404, "readable by group or others"),
+    ],
+)
+def test_bad_token_files_are_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, content: str, mode: int, message: str
+) -> None:
+    from jdad.server import TokenConfigError, resolve_token
+
+    monkeypatch.setenv("JDAD_TOKEN_FILE", str(_token_file(tmp_path, content, mode)))
+    with pytest.raises(TokenConfigError, match=message) as excinfo:
+        resolve_token()
+    assert "tok" not in str(excinfo.value).replace("token", "")
+
+
+def test_missing_token_file_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from jdad.server import TokenConfigError, resolve_token
+
+    monkeypatch.setenv("JDAD_TOKEN_FILE", str(tmp_path / "absent"))
+    with pytest.raises(TokenConfigError, match="cannot read"):
+        resolve_token()
+    monkeypatch.setenv("JDAD_TOKEN_FILE", str(tmp_path))
+    with pytest.raises(TokenConfigError):
+        resolve_token()
+
+
+def test_token_file_and_env_token_together_are_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from jdad.server import TokenConfigError, resolve_token
+
+    secret = "env-value-must-not-leak"
+    monkeypatch.setenv("JDAD_TOKEN", secret)
+    monkeypatch.setenv("JDAD_TOKEN_FILE", str(_token_file(tmp_path, "file-value-must-not-leak")))
+    with pytest.raises(TokenConfigError, match="both JDAD_TOKEN and JDAD_TOKEN_FILE") as excinfo:
+        resolve_token()
+    assert secret not in str(excinfo.value)
+    assert "file-value-must-not-leak" not in str(excinfo.value)
+
+
+def test_main_exits_cleanly_on_a_bad_token_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from jdad.server import main
+
+    monkeypatch.setenv("JDAD_TOKEN_FILE", str(_token_file(tmp_path, "tok-value-xyz", 0o644)))
+    with pytest.raises(SystemExit) as excinfo:
+        main(["--http", "--host", "0.0.0.0", "--port", str(_free_port())])
+    assert "readable by group or others" in str(excinfo.value.code)
+    assert "tok-value-xyz" not in str(excinfo.value.code)
+
+
+def test_token_file_satisfies_the_non_loopback_bind_check(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from jdad.server import check_http_bind, resolve_token
+
+    monkeypatch.setenv("JDAD_TOKEN_FILE", str(_token_file(tmp_path, "file-token")))
+    check_http_bind("0.0.0.0", allow_no_auth=False, token=resolve_token())
