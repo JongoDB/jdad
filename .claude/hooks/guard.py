@@ -63,7 +63,7 @@ WRAPPER_VALUE_OPTIONS = {
     "timeout": {"-s", "-k", "--signal", "--kill-after"},
     "stdbuf": {"-i", "-o", "-e"},
     # Not -i, -l, -e: their (optional) value is always attached ("-i{}").
-    "xargs": {"-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a", "--max-args", "--max-procs", "--delimiter", "--arg-file"},
+    "xargs": {"-I", "-J", "-R", "-S", "-n", "-P", "-L", "-s", "-d", "-E", "-a", "--max-args", "--max-procs", "--delimiter", "--arg-file"},
 }
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 # Programs that only print names: a glob argument to them reads nothing.
@@ -314,7 +314,7 @@ def _commands(command: str) -> list[tuple[list[str], bool]]:
     commands: list[tuple[list[str], bool]] = []
     current: list[str] = []
     for token in tokens:
-        if token and (set(token) <= set(SPLIT_CHARS) or token in ("{", "}")):
+        if token and set(token) <= set(SPLIT_CHARS):
             if current:
                 commands.append((current, token in ("|", "|&")))
             current = []
@@ -381,6 +381,9 @@ def _strip_wrappers(words: list[str]) -> list[str]:
     """Drop what can precede the real program: shell keywords and braces
     (if, do, {, !), VAR=value assignments, and wrapper programs."""
     while words:
+        if words[0] in ("function", "coproc") and len(words) > 2 and words[2] in ("{", "("):
+            words = words[2:]  # "function NAME {", "coproc NAME {": drop the name too
+            continue
         if words[0] in KEYWORDS or ASSIGNMENT_RE.fullmatch(words[0]):
             words = words[1:]
             continue
@@ -465,7 +468,28 @@ def _nested_commands(program: str, args: list[str]) -> list[str]:
     return nested
 
 
+def _after_first_wrapper(words: list[str]) -> list[str] | None:
+    """The words after the first wrapper program (sudo, env, timeout, xargs,
+    ...), skipping leading keywords and assignments; None if there's none."""
+    for i, word in enumerate(words):
+        if word in KEYWORDS or ASSIGNMENT_RE.fullmatch(word):
+            continue
+        return words[i + 1:] if PurePath(restore(word)).name in WRAPPERS else None
+    return None
+
+
 def _simple_reason(raw_words: list[str], depth: int, piped: bool = False) -> str | None:
+    # Wrapper options vary by tool and platform (attached values, clusters,
+    # durations), so rather than trust one parse, check every later word
+    # position as a possible program: "sudo -uroot rm -rf x" finds "rm -rf x".
+    tail = _after_first_wrapper(raw_words)
+    if tail and depth < MAX_DEPTH:
+        for i in range(len(tail)):
+            if restore(tail[i]).startswith("-"):
+                continue  # an option, not a program
+            reason = _simple_reason(tail[i:], depth + 1, piped)
+            if reason:
+                return reason
     raw_words = _strip_wrappers([restore(w) for w in raw_words[:1]] + raw_words[1:])
     if not raw_words:
         return None
