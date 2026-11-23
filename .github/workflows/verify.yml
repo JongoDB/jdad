@@ -11,8 +11,15 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          # Same uv as the Dockerfile; Python comes from .python-version.
+          version: "0.13.5"
+      - name: Install the Claude Code CLI (for claude plugin validate)
+        # Pinned; ./verify fails in CI if the CLI is missing.
+        run: npm install -g @anthropic-ai/claude-code@2.1.330
       - name: Run ./verify
         run: ./verify

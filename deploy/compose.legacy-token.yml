@@ -1,0 +1,14 @@
+# Used only by update-docker.sh, only when it rolls back to an image built
+# before the token moved to a file (an image without the io.jdad.token-file
+# label). Those images read JDAD_TOKEN and ignore JDAD_TOKEN_FILE, so with
+# docker-compose.yml alone they refuse to start and the service stays down.
+#
+# update-docker.sh reads the token file into JDAD_TOKEN in its own process
+# environment for that one `compose up`; the value is never on a command
+# line. It does end up in the rolled-back container's environment (and
+# `docker inspect`), as it was before the migration. The next normal deploy
+# recreates the container from docker-compose.yml alone, which removes it.
+services:
+  jdad:
+    environment:
+      JDAD_TOKEN: ${JDAD_TOKEN:?update-docker.sh sets JDAD_TOKEN from the token file for a legacy rollback}

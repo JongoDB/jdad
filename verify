@@ -19,7 +19,7 @@ elif [[ $# -gt 0 ]]; then
 fi
 
 echo "==> bash -n deploy scripts"
-for script in deploy/common.sh deploy/install.sh deploy/update.sh deploy/update-docker.sh; do
+for script in deploy/common.sh deploy/install.sh deploy/update.sh deploy/update-docker.sh deploy/firewall-cloudflare.sh deploy/migrate-token.sh; do
   bash -n "$script"
 done
 
@@ -39,11 +39,20 @@ done
 echo "==> deploy invocation and token parsing"
 bash tests/test_deploy_invocation.sh
 
+echo "==> token file migration"
+bash tests/test_migrate_token.sh
+
 echo "==> git checkout detection (clone and worktree)"
 bash tests/test_git_checkout.sh
 
+echo "==> origin firewall script"
+bash tests/test_firewall.sh
+
 echo "==> docker image"
 bash tests/test_docker.sh
+
+echo "==> kb content lint"
+uv run --frozen jdad lint-kb
 
 echo "==> ruff"
 uv run --frozen ruff check src tests .claude/hooks
@@ -57,6 +66,10 @@ uv build
 if command -v claude >/dev/null 2>&1; then
   echo "==> claude plugin validate"
   claude plugin validate .
+elif [[ -n "${CI:-}" ]]; then
+  # CI must not pass with the plugin unchecked; the workflow installs the CLI.
+  echo "==> claude plugin validate: FAILED (claude CLI not found and CI is set)" >&2
+  exit 1
 else
   echo "==> claude plugin validate: skipped (claude CLI not found on this machine; run it where the CLI is installed before merging)"
 fi
