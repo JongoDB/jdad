@@ -19,8 +19,9 @@ content that tries to steer an agent rather than inform it:
   protocol-relative ``//host``, and a bare IP address (decimal, octal or hex
   IPv4 parts, IPv6 with or without brackets, IPv4-mapped; ideographic and
   fullwidth full stops count as dots; a whole-number or 2-3 part IPv4 when
-  it acts as a host), normalized with ``ipaddress``. Loopback addresses and
-  a file name with a common extension and no path are exempt. In every KB tree, a Markdown link (inline or reference, including
+  it acts as a host), normalized with ``ipaddress``. Loopback with no path
+  (``127.0.0.1:8765``) and a file name with a common extension and no path
+  are exempt. In every KB tree, a Markdown link (inline or reference, including
   a destination after a line break) whose scheme isn't http or https
   (``javascript:``, ``data:``), after undoing backslash escapes, entities and
   whitespace.
@@ -524,13 +525,15 @@ def _ipv4_from_parts(text: str) -> ipaddress.IPv4Address | None:
 
 def _bare_host_problems(line: str, allowed: tuple[str, ...]) -> list[str]:
     """Bare IP addresses and protocol-relative //host forms in practices/.
-    Loopback (127.0.0.0/8, ::1) is exempt: "bind to 127.0.0.1" is advice,
-    not a place to send anything."""
+    Loopback (127.0.0.0/8, ::1) with no path is exempt: "bind to 127.0.0.1"
+    or "127.0.0.1:8765" is advice. Loopback with a path
+    ("127.0.0.1:2375/containers/json") points an agent at a local service,
+    so it is checked like any other host."""
     problems = []
     line = unicodedata.normalize("NFKC", line).translate(_IP_DOTS)
     for match in _BARE_IPV4_RE.finditer(line):
         address = _ipv4_from_parts(match.group(1))
-        if address and not address.is_loopback:
+        if address and not (address.is_loopback and not match.group(2)):
             rest = match.group(0)[len(match.group(1)):].rstrip(_URL_TRAILING)
             problem = _url_problem(f"{address}{rest}", allowed)
             if problem:
@@ -539,11 +542,14 @@ def _bare_host_problems(line: str, allowed: tuple[str, ...]) -> list[str]:
         parts = match.group(1).split(".")
         if len(parts) == 1 and not (parts[0].isdigit() and len(parts[0]) >= 8):
             continue  # small numbers and hex words aren't hosts
-        if len(parts) > 1 and (_ipv4_part(parts[-1]) or 0) <= 255:
-            continue  # 3.12, 2.1.0: read as versions
         address = _ipv4_from_parts(match.group(1))
-        if not address or address.is_loopback:
+        if not address:
             continue
+        has_path = "/" in (match.group(2) or "")
+        if address.is_loopback and not has_path:
+            continue
+        if len(parts) > 1 and (_ipv4_part(parts[-1]) or 0) <= 255 and not (address.is_loopback and has_path):
+            continue  # 3.12, 2.1.0: read as versions; 127.1/admin isn't one
         before = line[: match.start()].lower()
         if not (match.group(2) or before.endswith(("@", "host:", "host="))):
             continue
