@@ -230,11 +230,11 @@ def _free_port() -> int:
 
 
 class _HttpServer:
-    def __init__(self, port: int) -> None:
+    def __init__(self, port: int, token: str | None = None) -> None:
         self.port = port
         self.base = f"http://127.0.0.1:{port}"
         config = uvicorn.Config(
-            create_http_app(),
+            create_http_app(token),
             host="127.0.0.1",
             port=port,
             log_level="warning",
@@ -802,3 +802,24 @@ def test_token_file_satisfies_the_non_loopback_bind_check(
 
     monkeypatch.setenv("JDAD_TOKEN_FILE", str(_token_file(tmp_path, "file-token")))
     check_http_bind("0.0.0.0", allow_no_auth=False, token=resolve_token())
+
+
+def test_create_http_app_uses_the_token_it_is_given(
+    monkeypatch: pytest.MonkeyPatch, kb_root: Path
+) -> None:
+    """main() resolves the token once and passes it in; the app must use that
+    value, not re-read the environment (Checker batch 6: a create_http_app
+    that ignored its argument passed every test)."""
+    monkeypatch.setenv("JDAD_TOKEN", "env-token-not-a-secret")
+    given = "given-token-not-a-secret"
+    headers, payload = _mcp_initialize(given)
+    server = _HttpServer(_free_port(), token=given)
+    server.start()
+    try:
+        ok = httpx2.post(f"{server.base}/mcp", headers=headers, json=payload, timeout=5)
+        assert ok.status_code == 200
+        env_headers, _ = _mcp_initialize("env-token-not-a-secret")
+        refused = httpx2.post(f"{server.base}/mcp", headers=env_headers, json=payload, timeout=5)
+        assert refused.status_code == 401
+    finally:
+        server.stop()
