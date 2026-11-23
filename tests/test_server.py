@@ -69,19 +69,22 @@ async def test_list_topics_returns_performance(client: Client) -> None:
 
 
 @pytest.mark.anyio
-async def test_search_practices_returns_sections(client: Client) -> None:
+async def test_search_practices_returns_ranked_rules(client: Client) -> None:
     hits = tool_payload(
-        await client.call_tool("search_practices", {"query": "OpenTelemetry", "tag": "observability"})
+        await client.call_tool("search_practices", {"query": "OpenTelemetry traces", "tags": ["observability"]})
     )
-    assert hits
-    assert any(
-        hit["heading"] and "OpenTelemetry" in hit["body"] and hit["file"].endswith("performance.md")
-        for hit in hits
+    assert hits[0]["id"] == "perf.observability.otel-traces"
+    assert set(hits[0]) == {"id", "topic", "heading", "snippet", "score"}
+    detailed = tool_payload(
+        await client.call_tool(
+            "search_practices", {"query": "OpenTelemetry", "limit": 1, "response_format": "detailed"}
+        )
     )
-    frontend_only = tool_payload(
+    assert detailed[0]["file"].endswith("performance.md") and "OpenTelemetry" in detailed[0]["text"]
+    old_style = tool_payload(
         await client.call_tool("search_practices", {"query": "OpenTelemetry", "tag": "frontend"})
     )
-    assert frontend_only == []
+    assert old_style == []
 
 
 @pytest.mark.anyio

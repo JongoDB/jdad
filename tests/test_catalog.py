@@ -106,14 +106,11 @@ def test_repo_catalog_is_valid_and_has_the_performance_skill() -> None:
     assert (REPO_ROOT / "catalog" / "skills" / "jdad-performance" / "SKILL.md").is_file()
 
 
-def test_plugin_skills_match_the_catalog() -> None:
-    """Until P1.5's `jdad build` generates skills/, they are hand copies."""
+def test_plugin_skills_come_from_the_catalog() -> None:
+    """skills/ is `jdad build` output since P1.5 (tests/test_build.py checks it's current)."""
     catalog = REPO_ROOT / "catalog" / "skills"
     plugin = REPO_ROOT / "skills"
     assert sorted(p.name for p in catalog.iterdir() if p.is_dir()) == sorted(p.name for p in plugin.iterdir() if p.is_dir())
-    for skill in catalog.iterdir():
-        if skill.is_dir():
-            assert (plugin / skill.name / "SKILL.md").read_bytes() == (skill / "SKILL.md").read_bytes(), skill.name
 
 
 def test_cli_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

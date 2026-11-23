@@ -25,4 +25,6 @@ An always-on or glob-scoped rule for tools that support them (Cursor `.mdc` and 
 
 `./verify` runs `python -m jdad.catalog validate` (`src/jdad/catalog.py`, stdlib only) and the reference validator, `agentskills validate` from `skills-ref==0.1.1`, on every skill.
 
-Until P1.5's `jdad build` generates them, the plugin's `skills/<name>/SKILL.md` files are hand copies. `tests/test_catalog.py` fails if one differs from its catalog source.
+## Building
+
+`uv run jdad build` compiles this catalog into the plugin's `skills/` (Claude Code, also read by Grok Build), `generated/agents-skills/` (for `.agents/skills/`: Codex, Cursor) and `generated/cursor-rules/*.mdc`. Never edit those by hand. `./verify` runs `jdad build --check`, which fails when any output is stale, missing or not from the catalog. The outputs aren't under `dist/` because `uv build` ignores everything there.

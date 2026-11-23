@@ -8,7 +8,7 @@ import logging
 import os
 import stat
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
@@ -53,13 +53,24 @@ def list_topics() -> list[dict[str, Any]]:
 
 
 @mcp.tool(annotations=READ_ONLY)
-def search_practices(query: str, tag: str | None = None) -> list[dict[str, Any]]:
-    """Keyword search over practice sections: matched file, heading, body, and the section's rules
-    (each with id, text, tags, citation, origin, applies_when).
+def search_practices(
+    query: str,
+    tags: list[str] | None = None,
+    limit: int = 10,
+    response_format: Literal["concise", "detailed"] = "concise",
+    tag: str | None = None,
+) -> list[dict[str, Any]]:
+    """Search the KB's rules, best match first (BM25 over rule text, applies-when, heading, tags and ID).
 
-    Optional tag filter: frontend, backend, db, infra, observability, or testing.
+    Each hit has the rule `id`, `topic`, section `heading`, a short `snippet` and its `score`.
+    `response_format="detailed"` adds the full `text`, `tags`, `citation`, `origin`,
+    `applies_when` and `file`; use it only when you'll quote the rule. Optional `tags` filter:
+    frontend, backend, db, infra, observability, testing, security, supply-chain, ci, process, design, ux.
+    `limit` is 1-50 (default 10); a concise response is capped at 2048 bytes, so it may hold
+    fewer hits than `limit`.
+    `tag` is the older single-tag form of `tags`.
     """
-    return _kb().search_practices(query, tag=tag)
+    return _kb().search_practices(query, tag=tag, tags=tags, limit=limit, response_format=response_format)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -95,7 +106,8 @@ def get_source(id: str) -> str:
 def get_checklist(tags: list[str]) -> str:
     """Return rules filtered by tags, one line each (`- <id>: <text> (<citation>)`), ready to paste into a plan.
 
-    Tags: frontend, backend, db, infra, observability, testing. An empty list returns every rule.
+    Tags: frontend, backend, db, infra, observability, testing, security, supply-chain, ci, process, design, ux.
+    An empty list returns every rule.
     """
     return _kb().get_checklist(tags)
 
@@ -121,7 +133,7 @@ def apply_kb(task: str = "", tags: str = "") -> str:
 
 Before you write a plan or start implementation:{tag_hint}
 1. Call list_topics to see available practice files and tags.
-2. Call get_checklist with the tags that apply to this work (frontend, backend, db, infra, observability, testing). If you are unsure which tags apply, call search_practices with keywords from the task.
+2. Call get_checklist with the tags that apply to this work (frontend, backend, db, infra, observability, testing, security, supply-chain, ci, process, design, ux). If you are unsure which tags apply, call search_practices with keywords from the task.
 3. Pull the relevant checklist into your plan. Do not invent rules that are not in the KB, and do not apply a rule whose tag does not fit the work.
 4. When you open a PR, cite the specific KB rules you followed (topic, heading, and the source noted on the rule).
 

@@ -97,11 +97,12 @@ Goal: before adding features, make the repo itself cross-tool and give the KB an
   - Acceptance: validator tests have one failing fixture per spec rule listed in the deliverables (name = directory, charset, ≤64 chars, description ≤1024 chars, body < 500 lines, unknown top-level frontmatter key); `skills-ref validate` at a pinned version (recorded in the PR) exits 0 on every catalog skill; `claude plugin validate .` exits 0. Runtime: in a temp `HOME`, `claude plugin marketplace add` + `claude plugin install` succeed and the installed manifest lists the catalog skills; without a CLI the item stays open as runtime unverified.
   - Depends on: none.
   - Evidence (2026-11-22, JON-1335): `tests/test_catalog.py` (24) has a failing fixture per spec rule; `agentskills validate` from `skills-ref==0.1.1` passes on every catalog skill in `./verify`; `claude plugin validate .` passes; in a temp `HOME`, Claude Code 2.1.330 `plugin marketplace add` + `plugin install jdad@jdad` succeed and `plugin details` lists the `jdad-performance` skill.
-- [ ] **P1.5 Skill compiler v0 (`jdad build`)**
+- [x] **P1.5 Skill compiler v0 (`jdad build`)**
   - Goal: generate each tool's files from the catalog so no one hand-edits four copies.
   - Deliverables: `jdad build` writing (a) plugin `skills/` for Claude Code (also read by Grok Build), (b) `dist/agents-skills/` for `.agents/skills/` (Codex, Cursor), (c) Cursor `.mdc` files from `catalog/rules/` (`description`, `globs`, `alwaysApply`); a generated-file header; `jdad build --check` in `./verify` fails when outputs are stale; golden-file tests per target.
   - Acceptance: changing a catalog skill without rebuilding fails `./verify`; golden tests pass; the generated Claude skill matches today's `skills/jdad-performance/SKILL.md` apart from the generated-file header (diff shown in the PR).
   - Depends on: P1.4.
+  - Evidence (2026-11-22, JON-1336): `tests/test_build.py` has golden files for all three targets (`skills/`, `generated/agents-skills/`, `generated/cursor-rules/`; outputs live in `generated/` because `uv build` ignores all of `dist/`); editing a catalog skill without rebuilding makes `jdad build --check`, and so `./verify`, fail; the generated `skills/jdad-performance/SKILL.md` equals the catalog source apart from the two-line `metadata.generated` header.
 - [x] **P1.6 Dogfood the harness in this repo**
   - Goal: JDAD runs the same guardrails it will ship.
   - Deliverables: `.claude/settings.json` with deny rules (reading `.env*`, `**/*.pem`, `**/id_*`; `rm -rf`; `git push --force`) and a `Stop` hook that runs a fast verify subset (ruff + pytest -q) and exits 2 on failure; `LESSONS.md` seeded with the lessons from PR #1's six Checker rounds; a `./verify --fast` flag.
@@ -114,22 +115,24 @@ Goal: before adding features, make the repo itself cross-tool and give the KB an
 Goal: video or article → source → practice, with dedupe, tags and citations, done the same way every time.
 
 - [ ] **P2.1 Ingestion runbook and `jdad-ingest` skill**
-  - Deliverables: `docs/ingestion.md` (capture → transcript → `sources/` record → fold into `practices/` → dedupe → version bump → PR); `catalog/skills/jdad-ingest/` for Daisy and other agents; `/jdad add` keeps routing to Daisy.
-  - Acceptance: a dry run on one new article produces a source file and practice edits that pass `jdad lint-kb`; the runbook names the exact capture tool for video.
-  - Depends on: P1.3, P1.5. **Needs Jon:** which video transcript tool Daisy uses and where raw transcripts may live (in repo or not).
+  - Deliverables: `docs/ingestion.md` runbook (Jon's link → Daisy watches or reads it → extract tools, resources and practices → `sources/` record with the link and items → fold into `practices/` → dedupe → version bump → PR); `catalog/skills/jdad-ingest/` for Daisy and other agents; `/jdad add` keeps routing to Daisy.
+  - Acceptance: a dry run on one new article produces a source file and practice edits that pass `jdad lint-kb`; no transcript is stored anywhere.
+  - Depends on: P1.3, P1.5. Jon decided (2026-11-22): no transcript pipeline or transcripts repo; source records (link plus extracted items, with paraphrase, short quotes and timestamps) are public; Claude session transcripts and agent logs never go in the repo.
 - [ ] **P2.2 Duplicate and near-duplicate detection**
   - Deliverables: `jdad kb dupes` (offline token-overlap or TF-IDF similarity over rule text, stdlib only) listing candidate pairs above a threshold; a non-blocking report in `./verify` output.
   - Acceptance: a committed fixture file labels pairs as duplicate, paraphrase or distinct, and the PR records the cutoff θ; at θ, every exact-duplicate pair is reported, paraphrase recall ≥ 0.8, and no pair in the current KB labeled distinct is reported; the score output is in the PR.
   - Depends on: P1.2.
-- [ ] **P2.3 Tag taxonomy v2**
+- [x] **P2.3 Tag taxonomy v2**
   - Deliverables: add tags for `security`, `supply-chain`, `ci`, `process` (agent workflow), `design` (API and architecture), `ux`; document each in `docs/kb-schema.md`; `get_checklist` and the `/jdad` command accept them.
   - Acceptance: lint and `get_checklist` tests are parametrized over all six new tags; each tag returns its seeded rule ID and excludes rules with other tags; an unknown tag fails lint with the tag name in the error.
-  - Depends on: P1.2. **Needs Jon:** approve the tag list.
-- [ ] **P2.4 Ingest the harness research as KB sources**
+  - Depends on: P1.2. **Needs Jon:** approve the tag list. Approved as is, 2026-11-22.
+  - Evidence (2026-11-22, JON-1347): `tests/test_tags.py` is parametrized over the six tags: each lints clean, and `get_checklist([tag])` on `tests/fixtures/tags/` returns exactly its seeded rule ID; five misspelled tags fail lint with the tag named; README, `/jdad`, the schema doc, CLAUDE.md and the server strings list all twelve.
+- [x] **P2.4 Ingest the harness research as KB sources**
   - Goal: the agent-workflow opinions in VISION.md become cited KB rules, not just prose.
   - Deliverables: `sources/` records for OpenAI "Harness engineering", Anthropic's long-running harness and harness-design posts, and Claude Code best practices (see `docs/research/`); `practices/agentic-workflow.md` tagged `[process]`; `catalog/skills/jdad-workflow/`.
   - Acceptance: every rule cites one of those sources or is labeled a KB addition; `get_checklist(["process"])` returns them.
   - Depends on: P1.3, P2.3.
+  - Progress (2026-11-22, JON-1348): four `sources/` records, `practices/agentic-workflow.md` (61 rules, every section `[process]`, every rule cites one of the four), `skills/jdad-workflow/` as a hand copy; `tests/test_workflow_kb.py`. Done when the stacks met: `catalog/skills/jdad-workflow/` is the canonical copy and `jdad build` generates `skills/jdad-workflow/`.
 - [ ] **P2.5 Citation integrity and source freshness**
   - Deliverables: lint that every `src:` resolves to a source and item; a report of sources older than 12 months whose topic has newer sources.
   - Acceptance: with the date frozen in tests: source A older than 365 days plus a same-topic source B newer than A produces an A→B line in the report; a source with no newer same-topic peer isn't reported; a `src:` to a missing source or item number makes lint exit non-zero and names the citation.
@@ -139,10 +142,11 @@ Goal: video or article → source → practice, with dedupe, tags and citations,
 
 Goal: richer, still read-only and offline tools. ([ADR 0003](docs/adr/0003-stdio-plus-hosted-http-mcp.md))
 
-- [ ] **P3.1 Ranked lexical search**
+- [x] **P3.1 Ranked lexical search**
   - Deliverables: BM25 (stdlib) over rules; `search_practices(query, tags?, limit=10)` returns rule ID, topic, heading, snippet, score; a `concise|detailed` response format per Anthropic's tool-writing guidance.
   - Acceptance: a fixture KB and expected top-3 rule IDs for 10 queries are committed; tests assert those IDs in order; with `limit=10` and `concise`, the UTF-8 response is ≤ 2048 bytes.
   - Depends on: P1.2.
+  - Evidence (2026-11-22, JON-1346): `tests/fixtures/search/` (21 rules) and `queries.json` (10 queries, expected top-3 IDs in order); `tests/test_search.py` asserts them; with `limit=10` and `concise`, the UTF-8 JSON response is within 2048 bytes on the fixture and on the repo KB.
 - [ ] **P3.2 Optional semantic search**
   - Deliverables: `jdad[semantic]` extra with a small local embedding model; index built at deploy or update time, not per request; `search_practices(mode="semantic")` falls back to lexical when the extra isn't installed.
   - Acceptance: server starts and the full suite passes without the extra; with it, on ≥ 20 committed, labeled paraphrase queries, semantic recall@5 ≥ lexical recall@5 + 0.10; peak RSS under a fixed 100-request workload is recorded in the PR and is ≤ the memory budget Jon approves on the card.

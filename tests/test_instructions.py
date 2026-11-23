@@ -76,6 +76,6 @@ def test_claude_md_restates_nothing_from_agents_md() -> None:
     repeated = [line.strip() for line in CLAUDE.splitlines() if line.strip() in agents_lines]
     assert not repeated, f"lines in both files: {repeated}"
     # The distinctive rules that used to live in CLAUDE.md now live only in AGENTS.md.
-    for phrase in ("lockstep", "kb://practices/", "--no-optional-locks", "Deduplicate", "verbatim"):
+    for phrase in ("lockstep", "kb://practices/", "--no-optional-locks", "Deduplicate", "_TEMPLATE.md"):
         assert phrase in AGENTS, phrase
         assert phrase not in CLAUDE, phrase

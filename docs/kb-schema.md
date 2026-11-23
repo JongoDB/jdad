@@ -1,6 +1,6 @@
 # KB schema: practice files and rules
 
-Roadmap P1.2 (JON-1333). `jdad lint-kb` enforces everything here (`src/jdad/lint.py`, structure checks), and `src/jdad/kb.py` parses it. Source files get their own schema in P1.3.
+Roadmap P1.2 (JON-1333). `jdad lint-kb` enforces everything here (`src/jdad/lint.py`, structure checks), and `src/jdad/kb.py` parses it. Source files have frontmatter described in [ingestion.md](ingestion.md).
 
 ## A practice file
 
@@ -18,8 +18,27 @@ Optional intro prose. No rules here.
 
 - **One `#` title**, then optional prose (the preamble). Rules never go in the preamble; a rule meant for every area goes in a section tagged with every tag, like Rule zero.
 - **Sections** are `##` (or deeper) headings ending in one or more tags. Every section has at least one tag and at least one rule.
-- **Tags:** `frontend`, `backend`, `db`, `infra`, `observability`, `testing` (P2.3 adds more). A rule inherits its section's tags, and `get_checklist(tags)` selects sections by them.
+- **Tags:** one or more from the [table below](#tags). A rule inherits its section's tags, and `get_checklist(tags)` selects sections by them.
 - **A section contains only rules and blank lines.** Explanations belong in the rule text or in an `Applies when:` line.
+
+## Tags
+
+| Tag | Scope | Not to be confused with |
+| --- | --- | --- |
+| `frontend` | Browser and UI code: rendering, assets, bundles, client state | `ux` (what the user experiences) |
+| `backend` | Server code: request handling, jobs, outbound calls | `design` (the shape of an API or system) |
+| `db` | Schemas, queries, indexes, migrations, data-side caching | |
+| `infra` | Hosting, networking, CDN, containers, deploys | `ci` (the pipeline that runs checks) |
+| `observability` | Logs, metrics, traces, alerting, real-user monitoring | |
+| `testing` | What tests check and how: unit, integration, end-to-end, load | `ci` (where and when tests run) |
+| `security` | Authentication, authorization, secrets, input handling, trust boundaries | `supply-chain` (what you pull in) |
+| `supply-chain` | Dependencies, lockfiles, pinning, update bots, build provenance | `security` (your own code and config) |
+| `ci` | Pipelines and required checks: workflows, gates, release automation | `testing` |
+| `process` | How agents and people work: planning, review, verification, instruction files | |
+| `design` | API and architecture decisions: interfaces, boundaries, data contracts | `backend` (implementation) |
+| `ux` | User-facing behaviour and copy: flows, messages users see, accessibility | `frontend` (implementation) |
+
+Tag a section with every tag a reader would filter by; a rule about rate-limiting a login endpoint is `[backend] [security]`. Jon approved the last six on 2026-11-22 (P2.3).
 
 ## A rule
 
@@ -34,7 +53,7 @@ A rule is a `- ` bullet at the start of a line:
 | Part | Required | Format |
 | --- | --- | --- |
 | Text | yes | One instruction. Split combined advice into separate rules so each has one ID and one citation |
-| Citation | yes | `(src: <source> #n)` or `(src: <source> #n, #m)` when it came from a source, or `(KB addition)` when it didn't (Rule zero in `CLAUDE.md`). It sets `origin`: `source` or `kb-addition`. `<source>` is the short name used in that source's file name; P1.3 checks that it resolves |
+| Citation | yes | `(src: <source> #n)` or `(src: <source> #n, #m)` when it came from a source, or `(KB addition)` when it didn't (Rule zero in `CLAUDE.md`). It sets `origin`: `source` or `kb-addition`. `<source>` is a source's `cite_as`, and every `#n` must be within its `items` ([ingestion.md](ingestion.md)); the lint checks both |
 | ID | yes | `{#<prefix>.<area>.<slug>}`: lowercase letters, digits and hyphens, at least two dot-separated segments, unique across the KB, and the same `<prefix>` for every rule in a file (`perf` for `performance.md`). IDs are permanent: don't renumber or reuse them; retire a rule by deleting it |
 | Continuation | no | Indented lines join the rule's text. The citation and ID end the rule's last text line |
 | Applies when | no | An indented `Applies when: …` line, for rules that are easy to over-apply. Shown in checklists and returned as `applies_when` |

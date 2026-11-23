@@ -22,7 +22,11 @@ PRACTICES_DIR = "practices"
 SOURCES_DIR = "sources"
 
 # The tags a practice section may carry (docs/kb-schema.md). P2.3 extends this.
-KNOWN_TAGS = ("frontend", "backend", "db", "infra", "observability", "testing")
+# docs/kb-schema.md describes each. P2.3 (Jon, 2026-11-22) added the last six.
+KNOWN_TAGS = (
+    "frontend", "backend", "db", "infra", "observability", "testing",
+    "security", "supply-chain", "ci", "process", "design", "ux",
+)
 RULE_ID_RE = re.compile(r"^[a-z][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+$")
 _RULE_ID_SUFFIX_RE = re.compile(r"\s*\{#([^}]*)\}\s*$")
 _CITATION_SUFFIX_RE = re.compile(r"\s*\((src:[^()]*|KB addition)\)\s*$", re.IGNORECASE)
@@ -30,6 +34,42 @@ _RULE_START_RE = re.compile(r"^[-*]\s+(.*)$")
 _NUMBERED_RE = re.compile(r"^\s*\d+[.)]\s+(.*)$")
 _NESTED_BULLET_RE = re.compile(r"^\s+[-*+]\s+(.*)$")
 _APPLIES_RE = re.compile(r"^\s+applies when:\s*(.*)$", re.IGNORECASE)
+
+# Source frontmatter (docs/ingestion.md). Files whose name starts with "_"
+# (sources/_TEMPLATE.md) are templates, not entries.
+SOURCE_FIELDS = ("title", "author", "url", "format", "posted", "retrieved", "capture", "items", "cite_as")
+_FRONTMATTER_LINE_RE = re.compile(r"^([a-z_]+):\s*(.*)$")
+
+
+def parse_frontmatter(text: str) -> tuple[dict[str, str], list[tuple[int, str]]]:
+    """Flat `key: value` frontmatter between `---` lines at the top of a file.
+
+    Returns (fields, problems). Values are strings with one pair of matching
+    quotes removed. No nesting, lists or multi-line values: anything else is
+    a problem, so the format stays readable without a YAML library.
+    """
+    lines = text.split("\n")
+    if not lines or lines[0].removesuffix("\r") != "---":
+        return {}, [(1, "no frontmatter: the file must start with a '---' line")]
+    fields: dict[str, str] = {}
+    problems: list[tuple[int, str]] = []
+    for number, raw in enumerate(lines[1:], start=2):
+        line = raw.removesuffix("\r")
+        if line == "---":
+            return fields, problems
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = _FRONTMATTER_LINE_RE.match(line)
+        if not match:
+            problems.append((number, f"not a 'key: value' line: {line.strip()[:60]!r}"))
+            continue
+        key, value = match.group(1), match.group(2).strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        if key in fields:
+            problems.append((number, f"duplicate key '{key}'"))
+        fields[key] = value
+    return fields, problems + [(1, "frontmatter is never closed with a '---' line")]
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*)$")
 _TRAILING_TAG_RE = re.compile(r"\s*\[([a-z][a-z0-9-]*)\]\s*$")
@@ -469,10 +509,11 @@ class KnowledgeBase:
         return self.root / SOURCES_DIR
 
     def practice_paths(self) -> list[Path]:
-        return kb_markdown_files(self.root, self.practices_dir)
+        return [p for p in kb_markdown_files(self.root, self.practices_dir) if not p.name.startswith("_")]
 
     def source_paths(self) -> list[Path]:
-        return kb_markdown_files(self.root, self.sources_dir)
+        """Source entries; `_`-prefixed files (the template) are skipped."""
+        return [p for p in kb_markdown_files(self.root, self.sources_dir) if not p.name.startswith("_")]
 
     def practices(self) -> list[PracticeDoc]:
         """Every practice file that parses. A file that can't be read or parsed
@@ -511,55 +552,40 @@ class KnowledgeBase:
             except (OSError, UnicodeDecodeError) as exc:
                 logger.warning("skipping source %s: %s: %s", path.name, type(exc).__name__, exc)
                 continue
-            items.append(
-                {
-                    "id": path.stem,
-                    "file": path.relative_to(self.root).as_posix(),
-                    "title": first_heading(text, 1) or path.stem,
-                    "link": extract_link(text),
-                }
-            )
+            meta, _problems = parse_frontmatter(text)
+            entry: dict = {
+                "id": path.stem,
+                "file": path.relative_to(self.root).as_posix(),
+                "title": meta.get("title") or first_heading(text, 1) or path.stem,
+                "link": meta.get("url") or extract_link(text),
+            }
+            for key in SOURCE_FIELDS:
+                if key == "title":
+                    continue
+                value = meta.get(key)
+                entry[key] = int(value) if key == "items" and value and value.isdigit() else value
+            items.append(entry)
         return items
 
     def get_source(self, source_id: str) -> str:
         return read_kb_file(self._resolve_file(self.sources_dir, source_id, kind="source"))
 
-    def search_practices(self, query: str, tag: str | None = None) -> list[dict]:
-        needle = query.strip().lower()
-        if not needle:
-            return []
-        wanted = tag.strip().lower() if tag and tag.strip() else None
-        hits: list[dict] = []
-        for doc in self.practices():
-            if wanted is None:
-                intro = f"{doc.title}\n{doc.preamble}".lower()
-                if needle in intro:
-                    hits.append(
-                        {
-                            "topic": doc.topic,
-                            "file": doc.relpath,
-                            "heading": doc.title,
-                            "tags": doc.tags,
-                            "body": doc.preamble,
-                            "rules": [],
-                        }
-                    )
-            for section in doc.sections:
-                if wanted and wanted not in {t.lower() for t in section.tags}:
-                    continue
-                haystack = f"{section.heading}\n{' '.join(section.tags)}\n{section.body}"
-                if needle in haystack.lower():
-                    hits.append(
-                        {
-                            "topic": doc.topic,
-                            "file": doc.relpath,
-                            "heading": section.heading,
-                            "tags": list(section.tags),
-                            "body": section.body.strip(),
-                            "rules": [rule.as_dict() for rule in section.rules],
-                        }
-                    )
-        return hits
+    def search_practices(
+        self,
+        query: str,
+        tag: str | None = None,
+        *,
+        tags: list[str] | None = None,
+        limit: int = 10,
+        response_format: str = "concise",
+    ) -> list[dict]:
+        """BM25-ranked rules (jdad.search). `tag` is the old single-tag form."""
+        from jdad.search import search
+
+        wanted = list(tags or [])
+        if tag and tag.strip():
+            wanted.append(tag)
+        return search(self.practices(), query, tags=wanted, limit=limit, response_format=response_format)
 
     def get_checklist(self, tags: list[str] | None = None) -> str:
         wanted = {t.strip().lower() for t in (tags or []) if t and t.strip()}
@@ -654,8 +680,9 @@ class KnowledgeBase:
             raise FileNotFoundError(f"Invalid {kind} id {needle!r}")
 
         # Only files kb_markdown_files allows (no symlinks, nothing outside the
-        # KB, nothing oversized): the same set list_* returns.
-        files = kb_markdown_files(self.root, directory)
+        # KB, nothing oversized), minus `_`-prefixed ones (templates, drafts):
+        # the same set list_* returns, so nothing unlinted is ever served.
+        files = [p for p in kb_markdown_files(self.root, directory) if not p.name.startswith("_")]
         for path in files:
             if path.name == f"{stem}.md":
                 return path

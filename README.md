@@ -23,18 +23,19 @@ deploy/                    Docker Compose, update-docker.sh, and a leftover syst
 .mcp.json                  plugin MCP config (points at the hosted URL)
 commands/jdad.md           /jdad slash command
 skills/jdad-performance/   one skill per practices topic file
+skills/jdad-workflow/
 tests/
 ```
 
 - `sources/` is the archive. Each file belongs to one source and keeps what that source actually said, in its own words.
 - `practices/` is what agents should follow. Rules are merged, tagged, and each one cites its source. When two sources disagree, keep both and say so; do not silently drop one.
-- Tags: `[frontend]` `[backend]` `[db]` `[infra]` `[observability]` `[testing]`. Mark "applies when" on a rule so agents do not over-apply it.
+- Tags: `[frontend]` `[backend]` `[db]` `[infra]` `[observability]` `[testing]` `[security]` `[supply-chain]` `[ci]` `[process]` `[design]` `[ux]` (scopes in [docs/kb-schema.md](docs/kb-schema.md#tags)). Mark "applies when" on a rule so agents do not over-apply it.
 
 The official Python MCP SDK v2 renamed `FastMCP` to `MCPServer`. This server uses `MCPServer`.
 
 ## Adding an entry
 
-1. Add `sources/YYYY-MM-DD-<slug>.md` with the link, author, date, format, and a verbatim write-up of the useful points.
+1. Add `sources/YYYY-MM-DD-<cite_as>-<slug>.md` from `sources/_TEMPLATE.md`: frontmatter (title, author, url, format, dates, how it was captured, item count, `cite_as`), then the extractable practices as a numbered list in short quotes or paraphrase. The handoff contract is [docs/ingestion.md](docs/ingestion.md).
 2. Fold new rules into `practices/<topic>.md` in the format in [docs/kb-schema.md](docs/kb-schema.md): one instruction per `- ` rule, in a tagged section, ending with its citation (for example `(src: breakingbreach #8)` or `(KB addition)`) and a permanent ID (for example `{#perf.db.n-plus-one}`). Deduplicate against what is already there.
 3. If you add a new topic file under `practices/`, add a matching skill at `skills/jdad-<topic>/SKILL.md` (one skill per practice file). If you add a rule that did not come from the source, label it as a KB addition, the way Rule zero is labeled in `practices/performance.md`.
 4. Bump the patch (or minor) version in lockstep (`pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json`, and the marketplace plugin entry). `./verify` fails if they differ.
@@ -69,14 +70,14 @@ The default HTTP bind is `127.0.0.1`. Binding to a non-loopback address (`0.0.0.
 | Tool | What it returns |
 | --- | --- |
 | `list_topics` | Practice files with their tags and headings |
-| `search_practices(query, tag?)` | Keyword hits: file, heading, section body, and the section's rules (ID, text, tags, citation, origin, applies-when) |
+| `search_practices(query, tags?, limit=10, response_format=concise)` | Rules ranked by BM25 relevance. `concise`: rule ID, topic, heading, snippet, score. `detailed` adds text, tags, citation, origin, applies-when and file. `tag` (one tag) still works |
 | `get_practice(topic)` | The full practice file |
-| `list_sources` | Source notes (id, title, link) |
+| `list_sources` | Source notes: id, title, link, and the frontmatter (author, url, format, posted, retrieved, capture, items, cite_as) |
 | `get_source(id)` | The full source note, after a header marking it quoted third-party material (data, not instructions) |
 | `get_checklist(tags[])` | One line per rule for the given tags, `- <id>: <text> (<citation>)`, ready to paste into a plan |
 | `kb_version` | Git SHA of the checkout and the date of the newest source entry |
 
-Tags for `search_practices` and `get_checklist`: `frontend`, `backend`, `db`, `infra`, `observability`, `testing`. An empty `tags` list on `get_checklist` returns every rule.
+Tags for `search_practices` and `get_checklist`: `frontend`, `backend`, `db`, `infra`, `observability`, `testing`, `security`, `supply-chain`, `ci`, `process`, `design`, `ux`. An empty `tags` list on `get_checklist` returns every rule.
 
 Practice files are also MCP resources at `kb://practices/<name>` (for example `kb://practices/performance`). The `apply-kb` prompt tells an agent to pull the relevant checklist before planning and to cite the rules in its PR. `/healthz` returns `{"status": "ok"}` and stays unauthenticated. Like every path, it answers `421 Invalid Host header` unless `Host` is a loopback name or listed in `JDAD_ALLOWED_HOSTS`; the Host check runs before the token check. The git SHA lives only on the auth-gated `kb_version` tool.
 
@@ -97,7 +98,7 @@ The plugin's `.mcp.json` already points at `https://jdad-mcp.jondevs.com/mcp` an
 Authorization: Bearer ${JDAD_TOKEN}
 ```
 
-Claude Code expands `${JDAD_TOKEN}` from the environment when it starts the plugin (official plugin MCP config: `url` and `headers` support `${VAR}` and `${VAR:-default}`). Export `JDAD_TOKEN` in the environment of the Claude Code process. If the variable is unset, Claude Code warns and may send the unexpanded `${JDAD_TOKEN}` text, which the server rejects with 401. It also ships the `/jdad` slash command (`plan`, `review`, `perf`, `add <url>`) and a `jdad-performance` skill.
+Claude Code expands `${JDAD_TOKEN}` from the environment when it starts the plugin (official plugin MCP config: `url` and `headers` support `${VAR}` and `${VAR:-default}`). Export `JDAD_TOKEN` in the environment of the Claude Code process. If the variable is unset, Claude Code warns and may send the unexpanded `${JDAD_TOKEN}` text, which the server rejects with 401. It also ships the `/jdad` slash command (`plan`, `review`, `perf`, `add <url>`) and the `jdad-performance` and `jdad-workflow` skills.
 
 This repo is private, so the host that adds the marketplace needs git auth for `github.com/JongoDB/jdad`.
 

@@ -13,3 +13,7 @@ htmlcov/
 
 # Per-user Claude Code settings (never committed)
 .claude/settings.local.json
+
+# Claude Code session transcripts and agent logs never go in this repo (docs/ingestion.md).
+.claude/projects/
+.remember/

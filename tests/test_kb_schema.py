@@ -12,7 +12,7 @@ from jdad.kb import KnowledgeBase, parse_practice
 from jdad.lint import lint_kb
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-STRUCTURE_CHECKS = {"tag", "rule-id", "citation", "rule-format"}
+STRUCTURE_CHECKS = {"tag", "rule-id", "citation", "rule-format", "source"}
 
 GOOD = """# Good
 Intro prose is fine here.
@@ -26,9 +26,28 @@ Intro prose is fine here.
 """
 
 
+SOURCE_X = """---
+title: "X"
+author: "@x"
+url: https://example.com/x
+format: post
+posted: 2026-01-01
+retrieved: 2026-01-02
+capture: read the page
+items: 10
+cite_as: x
+---
+# X
+## The 10 items
+1 One. 2 Two. 3 Three. 4 Four. 5 Five. 6 Six. 7 Seven. 8 Eight. 9 Nine. 10 Ten.
+"""
+
+
 def make_kb(root: Path, files: dict[str, str | bytes]) -> Path:
     (root / "practices").mkdir(parents=True, exist_ok=True)
     (root / "sources").mkdir(exist_ok=True)
+    # A source the fixtures' "(src: x #n)" citations resolve to (items 1..10).
+    (root / "sources" / "2026-01-02-x.md").write_text(SOURCE_X)
     for rel, content in files.items():
         path = root / rel
         if isinstance(content, bytes):
@@ -178,11 +197,9 @@ def test_checklist_lines_carry_ids_and_citations() -> None:
 
 
 def test_search_hits_carry_structured_rules() -> None:
-    hits = KnowledgeBase(REPO_ROOT).search_practices("N+1", tag="db")
-    rules = [rule for hit in hits for rule in hit["rules"]]
-    n_plus_one = next(r for r in rules if r["id"] == "perf.db.n-plus-one")
-    assert n_plus_one == {
-        "id": "perf.db.n-plus-one",
+    hits = KnowledgeBase(REPO_ROOT).search_practices("N+1", tag="db", response_format="detailed")
+    n_plus_one = next(h for h in hits if h["id"] == "perf.db.n-plus-one")
+    assert {k: n_plus_one[k] for k in ("text", "tags", "citation", "origin", "applies_when")} == {
         "text": "Kill N+1 (batch/join).",
         "tags": ["db"],
         "citation": "src: breakingbreach #8",
@@ -192,14 +209,16 @@ def test_search_hits_carry_structured_rules() -> None:
 
 
 def test_performance_skill_mirrors_the_practice_rules() -> None:
-    """Until the skill compiler (P1.5) exists, the hand copy must match exactly (red-team L6)."""
+    """The skill's rules are a hand-written copy of the practice file's (in
+    catalog/, compiled into skills/ by `jdad build`), so they must match
+    exactly (red-team L6). Frontmatter is skipped: its indented lines
+    (`  generated: ...`) aren't rules."""
 
     def rule_lines(path: Path) -> list[str]:
-        return [
-            line
-            for line in path.read_text().splitlines()
-            if line.startswith(("- ", "  ", "## "))
-        ]
+        lines = path.read_text().splitlines()
+        if lines and lines[0] == "---":
+            lines = lines[lines.index("---", 1) + 1 :]
+        return [line for line in lines if line.startswith(("- ", "  ", "## "))]
 
     practice = rule_lines(REPO_ROOT / "practices" / "performance.md")
     skill = rule_lines(REPO_ROOT / "skills" / "jdad-performance" / "SKILL.md")
