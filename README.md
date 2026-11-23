@@ -35,7 +35,7 @@ The official Python MCP SDK v2 renamed `FastMCP` to `MCPServer`. This server use
 ## Adding an entry
 
 1. Add `sources/YYYY-MM-DD-<slug>.md` with the link, author, date, format, and a verbatim write-up of the useful points.
-2. Fold new rules into `practices/<topic>.md`. Deduplicate against what is already there. Tag each section, and cite the source on each rule (for example `(src: breakingbreach #8)`).
+2. Fold new rules into `practices/<topic>.md` in the format in [docs/kb-schema.md](docs/kb-schema.md): one instruction per `- ` rule, in a tagged section, ending with its citation (for example `(src: breakingbreach #8)` or `(KB addition)`) and a permanent ID (for example `{#perf.db.n-plus-one}`). Deduplicate against what is already there.
 3. If you add a new topic file under `practices/`, add a matching skill at `skills/jdad-<topic>/SKILL.md` (one skill per practice file). If you add a rule that did not come from the source, label it as a KB addition, the way Rule zero is labeled in `practices/performance.md`.
 4. Bump the patch (or minor) version in lockstep (`pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json`, and the marketplace plugin entry). `./verify` fails if they differ.
 5. Do not put secrets, tokens, or credentials in this repo.
@@ -69,11 +69,11 @@ The default HTTP bind is `127.0.0.1`. Binding to a non-loopback address (`0.0.0.
 | Tool | What it returns |
 | --- | --- |
 | `list_topics` | Practice files with their tags and headings |
-| `search_practices(query, tag?)` | Keyword hits: file, heading, and section body |
+| `search_practices(query, tag?)` | Keyword hits: file, heading, section body, and the section's rules (ID, text, tags, citation, origin, applies-when) |
 | `get_practice(topic)` | The full practice file |
 | `list_sources` | Source notes (id, title, link) |
 | `get_source(id)` | The full source note, after a header marking it quoted third-party material (data, not instructions) |
-| `get_checklist(tags[])` | Bullet rules for the given tags, ready to paste into a plan |
+| `get_checklist(tags[])` | One line per rule for the given tags, `- <id>: <text> (<citation>)`, ready to paste into a plan |
 | `kb_version` | Git SHA of the checkout and the date of the newest source entry |
 
 Tags for `search_practices` and `get_checklist`: `frontend`, `backend`, `db`, `infra`, `observability`, `testing`. An empty `tags` list on `get_checklist` returns every rule.
@@ -312,6 +312,13 @@ Later updates (idempotent; fails loudly; rolls back to the previous image if hea
 Before touching the running container it checks that `JDAD_UID` isn't 0; that the token file exists, isn't a symlink, is owned by the deploy uid, has no group or other permission bits and isn't empty; that the env file exists and no longer sets `JDAD_TOKEN`; that the certificate is a readable, unexpired PEM whose public key matches the private key (`openssl x509 -pubkey` vs `openssl pkey -pubout`); and that the key has no group or other permission bits. Then it sets `JDAD_GIT_SHA` from `git rev-parse HEAD`, does `git pull --ff-only`, `docker compose up -d --build`, and probes `/healthz` on the published port (443 in production) with `curl --cacert <origin.crt> --resolve jdad-mcp.jondevs.com:<port>:127.0.0.1`: the origin certificate must verify for the public name (no `-k`), and the body must be `{"status":"ok"}`. A wrong, expired or mismatched certificate fails the update and triggers the rollback. A rollback to an image from before the token file gets `JDAD_TOKEN` from the token file (see "Rolling back across the migration"). `JDAD_HEALTH_HOST` overrides the name. After a healthy update it prunes old `jdad:<sha>` images, keeping the current one and the previous one (also tagged `jdad:previous`) for rollback.
 
 `JDAD_ALLOWED_HOSTS` entries are lowercased, and wildcard entries such as `*` or `*.jondevs.com` are rejected at startup. Public hosts get `https://` origins only; `http://` origins are allowed for loopback.
+
+### Operations
+
+- `./deploy/update-docker.sh` builds before it swaps. The image build runs `jdad-mcp --check` (every KB file through the tools' read paths), so a commit that breaks the KB never replaces the running container. If a commit builds but fails the health check, the script rolls back, resets the checkout to the rolled-back SHA, and records the failed SHA in `~/.config/jdad/failed-sha`. The next run refuses that SHA until `main` moves on, or `JDAD_RETRY_FAILED=1` is set (use it when the failure had an outside cause, such as a certificate problem, that is now fixed). A successful deploy clears the record.
+- The container is capped at 512 MB of memory, 256 processes and 1 CPU, and its json-file logs rotate at 10 MB × 3.
+- Runbooks: [rebuild the endpoint from nothing](docs/ops/rebuild-runbook.md) (including the stopped NetBird stack and monitoring) and [rotate the bearer token](docs/ops/token-rotation.md).
+- `.github/workflows/uptime.yml` probes `/healthz` through Cloudflare four times an hour once the repo is public.
 
 ## Alternative: systemd on a host
 

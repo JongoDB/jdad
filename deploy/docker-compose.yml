@@ -44,6 +44,17 @@ services:
     read_only: true
     tmpfs:
       - /tmp
+    # The droplet has 2 GB and 1 vCPU, shared with sshd and Docker. JDAD
+    # idles well under 100 MB; these caps keep a leak or a flood inside the
+    # container instead of taking the host down.
+    mem_limit: 512m
+    pids_limit: 256
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     cap_drop:
       - ALL
     security_opt:
