@@ -8,6 +8,7 @@ the parsed KB; the KB is small, and nothing is cached across requests.
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import Counter
@@ -17,6 +18,9 @@ K1 = 1.2
 B = 0.75
 MAX_LIMIT = 50
 SNIPPET_CHARS = 90
+# A concise response never exceeds this many UTF-8 bytes as JSON (roadmap
+# P3.1): lower-ranked hits are dropped until it fits.
+MAX_CONCISE_BYTES = 2048
 # Keeps "n+1", "p95", "c#", "node.js" as single tokens.
 TOKEN_RE = re.compile(r"[a-z0-9]+(?:[+#.][a-z0-9]+|\+)*")
 STOPWORDS = frozenset(
@@ -79,6 +83,19 @@ def _documents(practices) -> list[Doc]:
     return docs
 
 
+def idf(n: int, df: int) -> float:
+    """BM25 inverse document frequency, the non-negative form:
+    log(1 + (n - df + 0.5) / (df + 0.5))."""
+    return math.log(1 + (n - df + 0.5) / (df + 0.5))
+
+
+def _fit(hits: list[dict], max_bytes: int) -> list[dict]:
+    """Drop the lowest-ranked hits until the JSON fits in max_bytes."""
+    while hits and len(json.dumps(hits, ensure_ascii=False).encode("utf-8")) > max_bytes:
+        hits = hits[:-1]
+    return hits
+
+
 def _snippet(text: str) -> str:
     text = " ".join(text.split())
     return text if len(text) <= SNIPPET_CHARS else text[: SNIPPET_CHARS - 1].rstrip() + "…"
@@ -108,8 +125,7 @@ def search(practices, query: str, tags: list[str] | None = None, limit: int = 10
             tf = counts.get(term, 0)
             if not tf:
                 continue
-            idf = math.log(1 + (n - df[term] + 0.5) / (df[term] + 0.5))
-            score += idf * tf * (K1 + 1) / (tf + K1 * (1 - B + B * len(doc.tokens) / avg_len))
+            score += idf(n, df[term]) * tf * (K1 + 1) / (tf + K1 * (1 - B + B * len(doc.tokens) / avg_len))
         if score > 0:
             scored.append((round(score, 3), doc))
     # Highest score first; ties broken by rule ID so results are stable.
@@ -120,4 +136,4 @@ def search(practices, query: str, tags: list[str] | None = None, limit: int = 10
         if response_format == "detailed":
             hit |= {"file": doc.file, **{k: v for k, v in doc.rule.as_dict().items() if k != "id"}}
         results.append(hit)
-    return results
+    return _fit(results, MAX_CONCISE_BYTES) if response_format == "concise" else results

@@ -8,6 +8,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[1]
 # Markers that appear on every line of a Claude Code session transcript.
 MARKERS = ('"sessionId"', '"parentUuid"')
+# Transcripts are .jsonl on disk; exports and copies show up as .json, .ndjson, .log or .txt.
+LOG_SUFFIXES = {".jsonl", ".json", ".ndjson", ".log", ".txt"}
 
 
 def tracked_files() -> list[Path]:
@@ -18,7 +20,7 @@ def tracked_files() -> list[Path]:
 
 
 def looks_like_session_log(path: Path) -> bool:
-    if path.suffix != ".jsonl" or not path.is_file():
+    if path.suffix not in LOG_SUFFIXES or not path.is_file():
         return False
     with path.open(encoding="utf-8", errors="replace") as handle:
         head = handle.read(4096)
@@ -39,6 +41,9 @@ def test_detector_recognises_a_session_line(tmp_path: Path) -> None:
     log = tmp_path / "abc.jsonl"
     log.write_text('{"parentUuid":null,"sessionId":"x","type":"user"}\n')
     assert looks_like_session_log(log)
+    exported = tmp_path / "session.json"
+    exported.write_text('[{"parentUuid": null, "sessionId": "x", "type": "user"}]')
+    assert looks_like_session_log(exported)
     data = tmp_path / "data.jsonl"
     data.write_text('{"id": 1}\n')
     assert not looks_like_session_log(data)

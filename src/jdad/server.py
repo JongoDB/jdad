@@ -64,7 +64,8 @@ def search_practices(
     `response_format="detailed"` adds the full `text`, `tags`, `citation`, `origin`,
     `applies_when` and `file`; use it only when you'll quote the rule. Optional `tags` filter:
     frontend, backend, db, infra, observability, testing, security, supply-chain, ci, process, design, ux.
-    `limit` is 1-50 (default 10).
+    `limit` is 1-50 (default 10); a concise response is capped at 2048 bytes, so it may hold
+    fewer hits than `limit`.
     `tag` is the older single-tag form of `tags`.
     """
     return _kb().search_practices(query, tag=tag, tags=tags, limit=limit, response_format=response_format)
