@@ -24,6 +24,8 @@ deploy/                    Docker Compose, update-docker.sh, and a leftover syst
 commands/jdad.md           /jdad slash command
 skills/jdad-performance/   one skill per practices topic file
 skills/jdad-workflow/
+skills/jdad-agent-tools/
+skills/jdad-ingest/       ingestion checklist (only writes inside a JDAD checkout)
 tests/
 ```
 
@@ -37,7 +39,7 @@ The official Python MCP SDK v2 renamed `FastMCP` to `MCPServer`. This server use
 
 1. Add `sources/YYYY-MM-DD-<cite_as>-<slug>.md` from `sources/_TEMPLATE.md`: frontmatter (title, author, url, format, dates, how it was captured, item count, `cite_as`), then the extractable practices as a numbered list in short quotes or paraphrase. The handoff contract is [docs/ingestion.md](docs/ingestion.md).
 2. Fold new rules into `practices/<topic>.md` in the format in [docs/kb-schema.md](docs/kb-schema.md): one instruction per `- ` rule, in a tagged section, ending with its citation (for example `(src: breakingbreach #8)` or `(KB addition)`) and a permanent ID (for example `{#perf.db.n-plus-one}`). Deduplicate against what is already there.
-3. If you add a new topic file under `practices/`, add a matching skill at `skills/jdad-<topic>/SKILL.md` (one skill per practice file). If you add a rule that did not come from the source, label it as a KB addition, the way Rule zero is labeled in `practices/performance.md`.
+3. If you add a new topic file under `practices/`, add a matching skill at `catalog/skills/jdad-<topic>/SKILL.md` (one skill per practice file) and run `uv run jdad build`; never edit `skills/` by hand. The full runbook is in [docs/ingestion.md](docs/ingestion.md#runbook). If you add a rule that did not come from the source, label it as a KB addition, the way Rule zero is labeled in `practices/performance.md`.
 4. Bump the patch (or minor) version in lockstep (`pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json`, and the marketplace plugin entry). `./verify` fails if they differ.
 5. Do not put secrets, tokens, or credentials in this repo.
 6. Run `uv run jdad lint-kb`. It fails on text addressed to an agent, URLs or shell commands in `practices/` that aren't allowlisted in `kb-lint.toml`, hidden or bidi Unicode, HTML or Markdown comments, symlinks, and non-`.md` files in `practices/` or `sources/`. See [docs/threat-model.md](docs/threat-model.md).
@@ -98,7 +100,7 @@ The plugin's `.mcp.json` already points at `https://jdad-mcp.jondevs.com/mcp` an
 Authorization: Bearer ${JDAD_TOKEN}
 ```
 
-Claude Code expands `${JDAD_TOKEN}` from the environment when it starts the plugin (official plugin MCP config: `url` and `headers` support `${VAR}` and `${VAR:-default}`). Export `JDAD_TOKEN` in the environment of the Claude Code process. If the variable is unset, Claude Code warns and may send the unexpanded `${JDAD_TOKEN}` text, which the server rejects with 401. It also ships the `/jdad` slash command (`plan`, `review`, `perf`, `add <url>`) and the `jdad-performance` and `jdad-workflow` skills.
+Claude Code expands `${JDAD_TOKEN}` from the environment when it starts the plugin (official plugin MCP config: `url` and `headers` support `${VAR}` and `${VAR:-default}`). Export `JDAD_TOKEN` in the environment of the Claude Code process. If the variable is unset, Claude Code warns and may send the unexpanded `${JDAD_TOKEN}` text, which the server rejects with 401. It also ships the `/jdad` slash command (`plan`, `review`, `perf`, `add <url>`) and the `jdad-performance`, `jdad-workflow`, `jdad-agent-tools` and `jdad-ingest` skills.
 
 This repo is private, so the host that adds the marketplace needs git auth for `github.com/JongoDB/jdad`.
 
