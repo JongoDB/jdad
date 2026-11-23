@@ -10,9 +10,14 @@ content that tries to steer an agent rather than inform it:
   on a skeleton of the text (NFKD, combining marks dropped, Cyrillic and
   Greek lookalikes mapped to Latin), per line and per paragraph, so a
   phrase split across lines or spelled with homoglyphs is still caught.
+  Base64 runs (standard or URL-safe, 24+ characters) that decode to text
+  matching these patterns are flagged in every KB tree.
 - ``url``: a URL in practices/ whose host isn't in ``url_allow``, including
-  a bare domain with no scheme or ``www`` (``evil.example.com/x``); only a
-  file name with a common extension and no path is exempt.
+  a bare domain with no scheme or ``www`` (``evil.example.com/x``) and a bare
+  IP address (``203.0.113.7:8080/x``, ``[2001:db8::1]``); only a file name
+  with a common extension and no path is exempt. In every KB tree, a
+  Markdown link (inline or reference) whose scheme isn't http or https
+  (``javascript:``, ``data:``), after undoing entities and whitespace.
 - ``html``: a raw HTML tag (``<img onerror=...>``, ``<span hidden>``). A tag
   with attributes or a real HTML element counts even inside code; only
   unknown bare tags in code (``<T>``) are exempt. practices/ and sources/.
@@ -28,7 +33,8 @@ content that tries to steer an agent rather than inform it:
   non-ASCII letter.
 - ``symlink``: a symlink anywhere in the KB trees.
 - ``encoding``: a file that isn't valid UTF-8.
-- ``file-type``: a file in any KB tree that isn't named ``*.md`` (lowercase).
+- ``file-type``: a file in any KB tree that isn't named ``*.md`` (lowercase),
+  or a KB directory name that exists as a plain file.
 - ``size``: a file over MAX_KB_FILE_BYTES (1 MiB); the server refuses to read it.
 
 Hidden-unicode, comment, homoglyph, symlink, encoding, file-type and size run
@@ -50,7 +56,10 @@ that line voids it::
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hashlib
+import html
 import re
 import tomllib
 import unicodedata
@@ -198,6 +207,20 @@ _CONFUSABLES = {
     0x13E2: "P", 0x13E6: "K", 0x13F4: "B",
 }
 _LETTER_RUN_RE = re.compile(r"[^\W\d_]+")
+# Markdown link destinations: inline [text](dest) and reference [label]: dest.
+# Only http(s) or a relative link (no scheme) is allowed; javascript:, data:,
+# vbscript: and the rest are flagged, after undoing entity-encoding and
+# stripping whitespace and control characters (browsers ignore them).
+_MD_INLINE_DEST_RE = re.compile(r"\]\(\s*(<[^>\n]*>|[^)\s]+)")
+_MD_REF_DEST_RE = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*(<[^>\n]*>|\S+)")
+_SCHEME_RE = re.compile(r"([a-z][a-z0-9+.-]*):")
+# Bare IP addresses in practices: dotted IPv4 (four octets, with an optional
+# port and path) and bracketed IPv6. Version numbers have fewer parts.
+_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
+_BARE_IPV4_RE = re.compile(rf"(?<![\w.:/-])({_OCTET}(?:\.{_OCTET}){{3}})(?::\d{{1,5}})?(/\S*)?(?![\w.])")
+_BARE_IPV6_RE = re.compile(r"\[([0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7})\]")
+# Base64 runs long enough to carry a sentence (standard or URL-safe alphabet).
+_BASE64_RE = re.compile(r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{24,}={0,2}")
 
 _MD_COMMENT_RE = re.compile(r"^\s*\[[^\]]*\]:\s*(#|<>)")
 # Lines are split on "\n" only (a trailing "\r" is dropped first), so every
@@ -415,6 +438,55 @@ def _injection_findings(rel: str, lines: list[str]) -> list[Finding]:
     return findings
 
 
+def _link_scheme_problems(line: str) -> list[str]:
+    """Markdown link destinations whose scheme isn't http or https."""
+    problems = []
+    dests = [m.group(1) for m in _MD_INLINE_DEST_RE.finditer(line)]
+    ref = _MD_REF_DEST_RE.match(line)
+    if ref:
+        dests.append(ref.group(1))
+    for dest in dests:
+        raw = dest[1:-1] if dest.startswith("<") and dest.endswith(">") else dest
+        clean = "".join(ch for ch in html.unescape(raw) if ch > " " and ch != "\x7f").lower()
+        scheme = _SCHEME_RE.match(clean)
+        if scheme and scheme.group(1) not in ("http", "https"):
+            problems.append(f"link with scheme '{scheme.group(1)}:' (only http, https or a relative link)")
+    return problems
+
+
+def _bare_ip_problems(line: str, allowed: tuple[str, ...]) -> list[str]:
+    problems = []
+    for match in _BARE_IPV4_RE.finditer(line):
+        problem = _url_problem(match.group(0).rstrip(_URL_TRAILING), allowed)
+        if problem:
+            problems.append(f"bare IP address: {problem}")
+    for match in _BARE_IPV6_RE.finditer(line):
+        if match.group(1).count(":") >= 2 and not any(f"[{match.group(1)}]" == entry for entry in allowed):
+            problems.append(f"bare IP address: '[{match.group(1)}]' is not in url_allow ({CONFIG_NAME})")
+    return problems
+
+
+def _base64_injection_findings(rel: str, number: int, line: str) -> list[Finding]:
+    """Base64 runs that decode to readable text matching the injection patterns."""
+    findings = []
+    for match in _BASE64_RE.finditer(line):
+        token = match.group(0).rstrip("=").replace("-", "+").replace("_", "/")
+        token += "=" * (-len(token) % 4)
+        try:
+            decoded = base64.b64decode(token, validate=True).decode("utf-8")
+        except (binascii.Error, ValueError):
+            continue
+        printable = sum(ch.isprintable() or ch in "\n\t" for ch in decoded)
+        if not decoded or printable / len(decoded) < 0.9:
+            continue
+        skeleton = _skeleton(decoded)
+        for pattern, why in _INJECTION_PATTERNS:
+            if pattern.search(skeleton):
+                findings.append(Finding(rel, number, "injection", f"base64-encoded agent-directed text: {why}", line))
+                break
+    return findings
+
+
 def _bare_domain_problems(line: str, allowed: tuple[str, ...]) -> list[str]:
     problems = []
     for match in _BARE_DOMAIN_RE.finditer(line):
@@ -462,7 +534,14 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
             or (not in_fence and not fence and _HTML_TAG_RE.search(_INLINE_CODE_RE.sub("", no_links)))
         ):
             findings.append(Finding(rel, number, "html", "raw HTML tag outside code (can hide text or carry handlers)", line))
+        for problem in _link_scheme_problems(line):
+            findings.append(Finding(rel, number, "url", problem, line))
+        # In every KB tree, skills and commands included: they may instruct
+        # agents in plain words, but never in an encoded payload.
+        findings.extend(_base64_injection_findings(rel, number, line))
         if top == "practices":
+            for problem in _bare_ip_problems(line, config.url_allow):
+                findings.append(Finding(rel, number, "url", problem, line))
             for match in _URL_RE.finditer(line):
                 problem = _url_problem(match.group(1).rstrip(_URL_TRAILING), config.url_allow)
                 if problem:
@@ -490,7 +569,10 @@ def lint_kb(root: Path) -> list[Finding]:
         if base.is_symlink():
             findings.append(Finding(name, 1, "symlink", "the directory itself is a symlink"))
             continue
+        if not base.exists():
+            continue
         if not base.is_dir():
+            findings.append(Finding(name, 1, "file-type", f"{name} exists but isn't a directory"))
             continue
         for path in sorted(base.rglob("*")):
             rel = path.relative_to(root).as_posix()
