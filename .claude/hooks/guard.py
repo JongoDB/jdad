@@ -119,7 +119,8 @@ REDIRECTS = (">", ">>", "<", "1>", "2>", "&>", ">|")
 REDIRECT_WORD_RE = re.compile(r"(\d*)(<<<|<<-|<<|<>|<&|>&|&>>|&>|>>|>\||<|>)(.*)", re.DOTALL)
 # Operands that make a shell read its script from stdin.
 STDIN_OPERANDS = {"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"}
-MAX_VARIANTS = 8  # expansions of one word checked at most
+MAX_VARIANTS = 8  # possible values of a word or a command checked; more is denied, never truncated
+FD_OPERAND_RE = re.compile(r"/(?:dev|proc/self)/fd/(\d+)")
 WORD_START = " \t\n;|&("
 
 
@@ -520,7 +521,9 @@ def _expand(word: str, variables: dict[str, list[str]]) -> list[str]:
     for match in VARIABLE_RE.finditer(word):
         literal = word[pos:match.start()]
         options = _reference_values(match, variables)
-        variants = [v + literal + o for v in variants for o in options][:MAX_VARIANTS]
+        variants = [v + literal + o for v in variants for o in options]
+        if len(variants) > MAX_VARIANTS:
+            raise Unclear("too many possible values to check")
         pos = match.end()
     out: list[str] = []
     for variant in variants:
@@ -529,23 +532,27 @@ def _expand(word: str, variables: dict[str, list[str]]) -> list[str]:
     return out
 
 
-def _expand_words(words: list[str], variables: dict[str, list[str]]) -> list[str]:
-    """Expand each word. Only a word that is nothing but one variable
-    reference ("$FLAGS", "${F:--rf}") is split into several words, as the
-    shell splits an unquoted expansion; any other word stays one word, so
-    message text after -m or --body is still skipped as a whole. When a
-    word has several possible expansions, all of them are kept."""
-    out: list[str] = []
+def _argv_variants(words: list[str], variables: dict[str, list[str]]) -> list[list[str]]:
+    """Every argv the words can expand to, each checked on its own (merging
+    values into one argv lets one hide another: "F=--; F=-rf; rm $F x").
+    Only a word that is nothing but one variable reference ("$FLAGS",
+    "${F:--rf}") is split into several words, as the shell splits an
+    unquoted expansion; any other word stays one word, so message text
+    after -m or --body is still skipped as a whole. More than MAX_VARIANTS
+    argvs is denied."""
+    argvs: list[list[str]] = [[]]
     for word in words:
         variants = _expand(word, variables)
         if variants == [word]:
-            out.append(word)
+            options = [[word]]
         elif VARIABLE_RE.fullmatch(word):
-            for variant in variants:
-                out.extend(variant.split())
+            options = [variant.split() for variant in variants]
         else:
-            out.extend(variants)
-    return out
+            options = [[variant] for variant in variants]
+        argvs = [argv + option for argv in argvs for option in options]
+        if len(argvs) > MAX_VARIANTS:
+            raise Unclear("too many possible values to check")
+    return argvs
 
 
 def _assignments(words: list[str]) -> list[tuple[str, str]]:
@@ -572,7 +579,16 @@ def _printed_texts(words: list[str], variables: dict[str, list[str]]) -> list[st
     """What an echo/printf command prints (joined both ways, since printf
     puts each argument on its own line with '%s\\n'); None for any other
     program."""
-    words = _strip_wrappers(_expand_words([restore(w) for w in words], variables))
+    texts: list[str] = []
+    for argv in _argv_variants([restore(w) for w in words], variables):
+        printed = _printed_argv(_strip_wrappers(argv))
+        if printed is None:
+            return None
+        texts.extend(printed)
+    return texts
+
+
+def _printed_argv(words: list[str]) -> list[str] | None:
     if not words or PurePath(words[0]).name not in TEXT_PROGRAMS:
         return None
     args = words[1:]
@@ -624,13 +640,24 @@ def _wrapper_code(wrapper: str, args: list[str]) -> list[str]:
 
 def _stdin_code(words: list[str], producer: list[str] | None, bodies: list[str],
                 variables: dict[str, list[str]]) -> tuple[list[str], str | None]:
-    """If this command runs a shell that reads its code from stdin, return
-    (code it reads, reason to deny when that code can't be seen).
-    Redirections count wherever they are ("<<<'x' bash", "bash 0<<<'x'")."""
-    words = _expand_words([restore(w) for w in words], variables)
+    """If this command runs a shell that reads its code from stdin (or from
+    another descriptor, /dev/fd/N), return (code it reads, reason to deny
+    when that code can't be seen). Every possible argv is checked."""
+    codes: list[str] = []
+    for argv in _argv_variants([restore(w) for w in words], variables):
+        found, unseen = _stdin_code_argv(argv, producer, bodies, variables)
+        if unseen:
+            return codes, unseen
+        codes.extend(found)
+    return codes, None
+
+
+def _stdin_code_argv(words: list[str], producer: list[str] | None, bodies: list[str],
+                     variables: dict[str, list[str]]) -> tuple[list[str], str | None]:
+    """Redirections count wherever they are ("<<<'x' bash", "bash 0<<<'x'",
+    "bash /dev/fd/3 3<<<'x'")."""
     rest: list[str] = []
-    herestrings: list[str] = []
-    heredoc = from_file = False
+    sources: dict[str, list[tuple[str, str]]] = {}  # fd -> [("here", text) | ("doc", "") | ("file", "")]
     k = 0
     while k < len(words):
         match = REDIRECT_WORD_RE.fullmatch(words[k])
@@ -639,45 +666,56 @@ def _stdin_code(words: list[str], producer: list[str] | None, bodies: list[str],
             k += 1
             continue
         fd, op, target = match.groups()
-        if not target and op not in ("<<", "<<-"):
+        if not target:  # a bare operator: the next word is its target (or heredoc delimiter)
             target = words[k + 1] if k + 1 < len(words) else ""
             k += 1
         k += 1
-        if fd not in ("", "0") or op.startswith((">", "&")):
-            continue  # an output or another descriptor
+        if op.startswith((">", "&")):
+            continue  # an output redirection
+        fd = fd or "0"
         if op == "<<<":
-            herestrings.append(target)
+            sources.setdefault(fd, []).append(("here", target))
         elif op in ("<<", "<<-"):
-            heredoc = True
+            sources.setdefault(fd, []).append(("doc", ""))
         else:
-            from_file = True  # <, <> or <&: a file or descriptor the guard can't see
+            sources.setdefault(fd, []).append(("file", ""))  # <, <> or <&: can't be seen
     rest = _strip_wrappers(rest)
     if not rest or PurePath(rest[0]).name not in SHELLS:
         return [], None
-    operand = reads_stdin = False
+    script_fd: str | None = None
+    operand = False
     args, k = rest[1:], 0
     while k < len(args):
         arg = args[k]
+        fd_operand = FD_OPERAND_RE.fullmatch(arg)
         if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg):
             return [], None  # sh -c CODE: checked by _nested_commands
         if arg in ("-o", "+o", "-O", "+O"):
             k += 2
             continue
-        if arg in STDIN_OPERANDS or arg == "-s":
-            reads_stdin = True
-        elif not arg.startswith(("-", "+")):
+        if script_fd is None and not operand and (arg in STDIN_OPERANDS or arg == "-s" or fd_operand):
+            script_fd = fd_operand.group(1) if fd_operand else "0"
+        elif not arg.startswith(("-", "+")) and script_fd is None:
             operand = True  # a script file: a known gap (its text isn't visible)
         k += 1
-    if operand and not reads_stdin:
+    if operand:
         return [], None
-    codes = list(herestrings) + (list(bodies) if heredoc else [])
-    if producer is not None:
+    fd = script_fd or "0"
+    codes: list[str] = []
+    for kind, text in sources.get(fd, []):
+        if kind == "here":
+            codes.append(text)
+        elif kind == "doc":
+            codes.extend(bodies)
+        else:
+            return codes, "a shell reads code from a file or descriptor the guard can't see"
+    if fd == "0" and producer is not None:
         printed = _printed_texts(producer, variables)
         if printed is None:
             return codes, "a shell reads code from a pipe the guard can't see"
         codes.extend(printed)
-    if from_file:
-        return codes, "a shell reads code from a file or descriptor the guard can't see"
+    if fd != "0" and fd not in sources:
+        return codes, f"a shell reads code from descriptor {fd}, which the guard can't see"
     return codes, None
 
 
@@ -769,8 +807,17 @@ def _simple_reason_inner(raw_words: list[str], depth: int, piped: bool, scan_tai
             reason = _token_reason(variant, lister=False, redirect=False)
             if reason:
                 return reason
-    # Flags or the program held in a variable the command set ("F=-rf; rm $F").
-    raw_words = _expand_words(raw_words, variables)
+    # Flags or the program held in a variable the command set ("F=-rf; rm $F"):
+    # every possible argv is checked on its own.
+    for argv in _argv_variants(raw_words, variables):
+        reason = _argv_reason(argv, depth, piped, scan_tail, consumed, variables)
+        if reason:
+            return reason
+    return None
+
+
+def _argv_reason(raw_words: list[str], depth: int, piped: bool, scan_tail: bool,
+                 consumed: bool, variables: dict[str, list[str]]) -> str | None:
     head = _skip_prefix([restore(w) for w in raw_words])
     if head and PurePath(head[0]).name in CODE_WRAPPERS:
         for code in _wrapper_code(PurePath(head[0]).name, head[1:]):
@@ -848,7 +895,11 @@ def bash_reason(command: str, depth: int = 0, consumed: bool = False,
     for words, _piped in commands:
         for name, value in _assignments(words):
             known = variables.setdefault(name, [])
-            for variant in _expand(value, variables):
+            try:
+                expanded = _expand(value, variables)
+            except Unclear as exc:
+                return f"can't check this command safely ({exc})"
+            for variant in expanded:  # never truncated; a use with too many values is denied in _expand
                 if variant not in known:
                     known.append(variant)
     for sub in inner:
