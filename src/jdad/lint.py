@@ -6,7 +6,9 @@ content that tries to steer an agent rather than inform it:
 
 - ``injection``: text addressed to an AI agent (``ignore previous
   instructions``, fake ``system:`` turns, chat-template tokens, ``don't tell
-  the user``, requests to send secrets). practices/ and sources/. Matched
+  the user``, requests to send secrets, polite forms such as ``As the AI
+  assistant reading this, you ...``, ``Note to any coding agent:`` and a
+  claimed ``the user has pre-approved``). practices/ and sources/. Matched
   on a skeleton of the text (NFKD, combining marks dropped, Cyrillic and
   Greek lookalikes mapped to Latin), per line and per paragraph, so a
   phrase split across lines or spelled with homoglyphs is still caught.
@@ -15,9 +17,11 @@ content that tries to steer an agent rather than inform it:
 - ``url``: a URL in practices/ whose host isn't in ``url_allow``, including
   a bare domain with no scheme or ``www`` (``evil.example.com/x``), a
   protocol-relative ``//host``, and a bare IP address (decimal, octal or hex
-  IPv4 parts, IPv6 with or without brackets, IPv4-mapped), normalized with
-  ``ipaddress``; only a file name with a common extension and no path is
-  exempt. In every KB tree, a Markdown link (inline or reference, including
+  IPv4 parts, IPv6 with or without brackets, IPv4-mapped; ideographic and
+  fullwidth full stops count as dots; a whole-number or 2-3 part IPv4 when
+  it acts as a host), normalized with ``ipaddress``. Loopback with no path
+  (``127.0.0.1:8765``; nothing but a port may follow) and a file name with a common extension and no path
+  are exempt. In every KB tree, a Markdown link (inline or reference, including
   a destination after a line break) whose scheme isn't http or https
   (``javascript:``, ``data:``), after undoing backslash escapes, entities and
   whitespace.
@@ -42,6 +46,16 @@ content that tries to steer an agent rather than inform it:
 
 Hidden-unicode, comment, homoglyph, symlink, encoding, file-type and size run
 on practices/, sources/, skills/ and commands/.
+
+Structure checks (practices/*.md, docs/kb-schema.md):
+
+- ``tag``: a section with no tag, or a tag outside the known set.
+- ``rule-id``: a rule with no ``{#id}``, a malformed or duplicate ID, or an
+  ID whose first segment differs from the rest of the file's.
+- ``citation``: a rule without ``(src: ...)`` or ``(KB addition)``.
+- ``rule-format``: nested or numbered items, prose in a section, a rule
+  before the first section, or a section with no rules. The parser keeps
+  such text (it isn't dropped from checklists), but the KB must not rely on it.
 
 Configuration lives in ``kb-lint.toml`` at the KB root. An exception names
 the check, the path and the SHA-256 of the exact offending line, so editing
@@ -71,7 +85,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from jdad.kb import MAX_KB_FILE_BYTES
+from jdad.kb import KNOWN_TAGS, MAX_KB_FILE_BYTES, RULE_ID_RE, parse_practice
 
 INSTRUCTION_DIRS = ("practices", "sources")
 ALL_DIRS = ("practices", "sources", "skills", "commands")
@@ -107,6 +121,24 @@ _INJECTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
             "asks for secrets to be sent somewhere",
         ),
         (r"\bas\s+an\s+(ai|llm|language\s+model|assistant)\b", "addresses the reader as an AI"),
+        # Polite forms (Checker's #27 verdict): "As the AI assistant reading
+        # this, you ...", "Note to any coding agent: ...", and a claimed
+        # pre-approval. Talking about agents ("the agent should retry") passes.
+        (
+            (r"\bas\s+(the|an?|any)\s+((ai|llm|coding|language|automated)\s+)?"
+            r"(assistant|agent|model|llm|ai)\b[^.\n]{0,60}\byou\b"),
+            "addresses the reader as an AI",
+        ),
+        (
+            (r"\b(note|message|reminder|notice|attention|psa)\s+(to|for)\s+((any|all|every|the)\s+)?"
+            r"((ai|llm|coding|automated)\s+)?(assistants?|agents?|models?|llms?|ais?)\s*[:,-]"),
+            "addresses the reader as an AI",
+        ),
+        (
+            (r"\bthe\s+user\s+(has|had)\s+(already\s+(approved|authori[sz]ed|agreed|consented)|"
+            r"pre-?(approved|authori[sz]ed))\b"),
+            "claims the user has already granted permission",
+        ),
     )
 )
 
@@ -173,6 +205,17 @@ _BARE_DOMAIN_RE = re.compile(
     r"(?<![\w@./:%-])(?!www\.)((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+([a-z]{2,24}))(/\S*)?",
     re.IGNORECASE,
 )
+_RULE_ID_TAIL_RE = re.compile(r"\s*\{#([a-z0-9][a-z0-9.-]*)\}\s*$")
+# A rule ID must not end like a hostname (perf.evil.com), since the ID is
+# exempt from the bare-domain check on its own rule line.
+_TLD_LIKE = frozenset(
+    {
+        "com", "net", "org", "io", "dev", "app", "co", "ai", "xyz", "info", "biz", "me", "ly", "gg",
+        "cc", "tk", "ru", "cn", "top", "site", "online", "link", "click", "live", "store", "tech",
+        "cloud", "page", "run", "pro", "us", "uk", "de", "fr", "eu", "ca", "au", "tv", "ws", "su",
+        "pw", "icu", "shop", "work", "zone", "agency", "sh", "to", "is", "so", "in", "it", "at",
+    }
+)
 _FILE_EXTENSIONS = frozenset(
     {
         "md", "markdown", "txt", "rst", "toml", "yaml", "yml", "json", "jsonc", "lock", "cfg", "ini",
@@ -220,13 +263,23 @@ _MD_INLINE_DEST_RE = re.compile(r"\]\(\s*(<[^>\n]*>|[^)\s]+)")
 _MD_REF_DEST_RE = re.compile(r"^[ ]{0,3}\[[^\]\n]+\]:[ \t]*(?:\n[ \t]*)?(<[^>\n]*>|\S+)", re.MULTILINE)
 _MD_BACKSLASH_ESCAPE_RE = re.compile(r"\\([!-/:-@\[-`{-~])")
 _SCHEME_RE = re.compile(r"([a-z][a-z0-9+.-]*):")
-# Bare IP addresses in practices: dotted IPv4 (four octets, with an optional
-# port and path) and bracketed IPv6. Version numbers have fewer parts.
+# Bare IP addresses in practices: dotted IPv4 (four parts, with an optional
+# port and path) and IPv6. Version numbers have fewer parts.
 # Candidates are wide (decimal, octal or hex parts; IPv6 with or without
 # brackets, IPv4-mapped tails) and each is confirmed with `ipaddress`.
 _IPV4_PART = r"(?:0x[0-9a-f]+|\d+)"
-_BARE_IPV4_RE = re.compile(rf"(?<![\w.])({_IPV4_PART}(?:\.{_IPV4_PART}){{3}})(?::\d{{1,5}})?(/\S*)?(?![\w.])", re.IGNORECASE)
+_BARE_IPV4_RE = re.compile(rf"(?<![\w.])({_IPV4_PART}(?:\.{_IPV4_PART}){{3}})(?::\d{{1,5}})?(/\S*)?(?!\w|\.\w)", re.IGNORECASE)
 _BARE_IPV6_RE = re.compile(r"\[([0-9A-Fa-f:.]+)\]|(?<![\w:.])([0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:\.\d{1,3}){0,3})(?![\w:])")
+# Short IPv4 forms inet_aton accepts: a whole number (8+ digits) or 2-3 parts
+# whose last part spans the remaining bytes. Counted only where they act as a
+# host (a port, a path with a letter, or after '@' or 'host:'), and a dotted
+# short form only when its last part is over 255, so 3.12 and 2.1.0 pass.
+_SHORT_IPV4_RE = re.compile(
+    rf"(?<![\w./])({_IPV4_PART}(?:\.{_IPV4_PART}){{0,2}})(:\d{{2,5}}(?:/\S*)?|/[^\s/]*[a-z]\S*)?(?!\w|\.\w)", re.IGNORECASE
+)
+# Full stops a browser or resolver reads as '.' (U+FF0E and U+FF61 also fold
+# under NFKC; U+3002 doesn't).
+_IP_DOTS = str.maketrans({"\u3002": ".", "\uff0e": ".", "\uff61": "."})
 _PROTOCOL_RELATIVE_RE = re.compile(r"(?<![:\w/])//([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,24})(/\S*)?", re.IGNORECASE)
 # Base64 runs long enough to carry a sentence (standard or URL-safe alphabet).
 _BASE64_RE = re.compile(r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{24,}={0,2}")
@@ -468,36 +521,92 @@ def _link_scheme_findings(rel: str, text: str, lines: list[str]) -> list[Finding
     return findings
 
 
+def _ipv4_part(part: str) -> int | None:
+    """One inet_aton part: decimal, 0x-hex or 0-prefixed octal."""
+    try:
+        return int(part, 16) if part.lower().startswith("0x") else int(part, 8) if len(part) > 1 and part.startswith("0") else int(part)
+    except ValueError:
+        return None
+
+
 def _ipv4_from_parts(text: str) -> ipaddress.IPv4Address | None:
-    """Dotted IPv4 the way inet_aton reads it: each part decimal, 0x-hex or
-    0-prefixed octal."""
-    octets = []
-    for part in text.split("."):
-        try:
-            value = int(part, 16) if part.lower().startswith("0x") else int(part, 8) if len(part) > 1 and part.startswith("0") else int(part)
-        except ValueError:
-            return None
-        if value > 255:
-            return None
-        octets.append(value)
-    return ipaddress.IPv4Address(".".join(map(str, octets)))
+    """IPv4 the way inet_aton reads it: 1-4 parts, each decimal, 0x-hex or
+    0-prefixed octal; every part but the last is one byte, and the last
+    fills the remaining bytes."""
+    values = [_ipv4_part(part) for part in text.split(".")]
+    if None in values:
+        return None
+    if not 1 <= len(values) <= 4 or any(v > 255 for v in values[:-1]) or values[-1] >= 256 ** (5 - len(values)):
+        return None
+    number = 0
+    for value in values[:-1]:
+        number = number * 256 + value
+    return ipaddress.IPv4Address(number * 256 ** (5 - len(values)) + values[-1])
+
+
+# After a host: an optional port, then only closing punctuation before
+# whitespace or the end of the line. Anything else ('/', '?', '#', '\\')
+# makes it a URL.
+_BARE_END_RE = re.compile(r"(?::\d{1,5})?[.,;:!?)\]}\"'`*_]*(?:\s|$)")
+
+
+def _ends_bare(line: str, end: int) -> bool:
+    return bool(_BARE_END_RE.match(line, end))
+
+
+def _host_token(line: str, start: int, host: str, address: object) -> str:
+    """The whole whitespace-delimited token from `start`, with the host as
+    written replaced by its normalized address."""
+    token = re.match(r"\S*", line[start:]).group(0).rstrip(_URL_TRAILING)
+    return f"{address}{token[len(host):]}"
 
 
 def _bare_host_problems(line: str, allowed: tuple[str, ...]) -> list[str]:
-    """Bare IP addresses and protocol-relative //host forms in practices/."""
+    """Bare IP addresses and protocol-relative //host forms in practices/.
+    Loopback (127.0.0.0/8, ::1) is exempt only when nothing but a port and
+    closing punctuation follows it: "bind to 127.0.0.1" or "127.0.0.1:8765"
+    is advice. Anything more ("127.0.0.1:2375/containers/json", "?all=1",
+    a backslash) points an agent at a local service, so the whole token is
+    checked like any other URL."""
     problems = []
+    line = unicodedata.normalize("NFKC", line).translate(_IP_DOTS)
     for match in _BARE_IPV4_RE.finditer(line):
         address = _ipv4_from_parts(match.group(1))
-        if address:
-            rest = match.group(0)[len(match.group(1)):].rstrip(_URL_TRAILING)
-            problem = _url_problem(f"{address}{rest}", allowed)
-            if problem:
-                problems.append(f"bare IP address '{match.group(1)}': {problem}")
+        if not address or (address.is_loopback and _ends_bare(line, match.end(1))):
+            continue
+        problem = _url_problem(_host_token(line, match.start(1), match.group(1), address), allowed)
+        if problem:
+            problems.append(f"bare IP address '{match.group(1)}': {problem}")
+    for match in _SHORT_IPV4_RE.finditer(line):
+        parts = match.group(1).split(".")
+        if len(parts) == 1 and not (parts[0].isdigit() and len(parts[0]) >= 8):
+            continue  # small numbers and hex words aren't hosts
+        address = _ipv4_from_parts(match.group(1))
+        if not address:
+            continue
+        if address.is_loopback:
+            if _ends_bare(line, match.end(1)):
+                continue
+        else:
+            if len(parts) > 1 and (_ipv4_part(parts[-1]) or 0) <= 255:
+                continue  # 3.12, 2.1.0: read as versions (127.1/admin isn't one)
+            if not (match.group(2) or line[: match.start()].lower().endswith(("@", "host:", "host="))):
+                continue
+        problem = _url_problem(_host_token(line, match.start(1), match.group(1), address), allowed)
+        if problem:
+            problems.append(f"bare IP address '{match.group(1)}' ({address}): {problem}")
     for match in _BARE_IPV6_RE.finditer(line):
         candidate = match.group(1) or match.group(2)
         try:
             address = ipaddress.IPv6Address(candidate)
         except ValueError:
+            continue
+        if address.is_loopback or (address.ipv4_mapped and address.ipv4_mapped.is_loopback):
+            if _ends_bare(line, match.end()):
+                continue
+            problem = _url_problem(re.match(r"\S*", line[match.start():]).group(0).rstrip(_URL_TRAILING), allowed)
+            if problem:
+                problems.append(f"bare IP address '{candidate}' with a path: {problem}")
             continue
         if f"[{address.compressed}]" not in allowed and address.compressed not in allowed:
             problems.append(f"bare IP address '{candidate}' ({address.compressed}) is not in url_allow ({CONFIG_NAME})")
@@ -580,6 +689,17 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
     # and U+2029, which would hide exactly the characters checked below.
     lines = [line.removesuffix("\r") for line in text.split("\n")]
     findings: list[Finding] = []
+    # Lines on which a parsed rule's own {#id} may be stripped before the
+    # bare-domain check: only lines inside that rule, only that exact ID.
+    rule_id_lines: dict[int, str] = {}
+    if top == "practices" and rel.count("/") == 1:
+        try:
+            for rule in parse_practice(path, root=root).rules:
+                if rule.id:
+                    for number in range(rule.line, max(rule.last_line, rule.line) + 1):
+                        rule_id_lines[number] = rule.id
+        except (OSError, UnicodeDecodeError, ValueError):
+            pass
     in_fence = False
     for number, line in enumerate(lines, start=1):
         fence = bool(_FENCE_RE.match(line))
@@ -612,7 +732,13 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
                 problem = _url_problem(match.group(1).rstrip(_URL_TRAILING), config.url_allow)
                 if problem:
                     findings.append(Finding(rel, number, "url", problem, line))
-            for problem in _bare_domain_problems(line, config.url_allow):
+            # A rule's trailing {#perf.db.n-plus-one} ID (docs/kb-schema.md) is
+            # dotted like a domain; the rule-id check validates it instead.
+            checked = line
+            tail = _RULE_ID_TAIL_RE.search(line)
+            if tail and rule_id_lines.get(number) == tail.group(1):
+                checked = line[: tail.start()]
+            for problem in _bare_domain_problems(checked, config.url_allow):
                 findings.append(Finding(rel, number, "url", problem, line))
             for link in _AUTOLINK_RE.finditer(line):
                 scheme = link.group(0)[1:].split(":", 1)[0].lower()
@@ -666,4 +792,94 @@ def lint_kb(root: Path) -> list[Finding]:
                 findings.append(
                     Finding(rel, 1, "file-type", f"only <name>.md files (lowercase extension, no dotfiles) belong in {name}/")
                 )
+    findings.extend(_structure_findings(root))
     return [f for f in findings if not config.allows(f)]
+
+
+def _assembled_rule_findings(rel: str, rule) -> list[Finding]:
+    """Content checks on a multi-line rule as agents see it (one joined line).
+
+    The per-line checks can't see a phrase split across continuation lines
+    ("Ignore previous" / "instructions"), but the checklist shows it joined.
+    Exceptions can't be pinned to this text; split the rule differently.
+    """
+    joined = rule.checklist_line()
+    span = f"lines {rule.line}-{rule.last_line}"
+    found: list[Finding] = []
+    for pattern, why in _INJECTION_PATTERNS:
+        if pattern.search(_skeleton(joined)):
+            found.append(Finding(rel, rule.line, "injection", f"agent-directed text in the joined rule ({span}): {why}", joined))
+            break
+    if _PIPE_TO_SHELL_RE.search(joined):
+        found.append(Finding(rel, rule.line, "shell", f"the joined rule ({span}) pipes a download into a shell", joined))
+    return found
+
+
+def _structure_findings(root: Path) -> list[Finding]:
+    """Rule-format checks over every top-level practices/*.md (docs/kb-schema.md)."""
+    findings: list[Finding] = []
+    seen_ids: dict[str, str] = {}
+    base = root / "practices"
+    if not base.is_dir():
+        return findings
+    for path in sorted(base.glob("*.md")):
+        if path.is_symlink() or not path.is_file():
+            continue  # reported by the symlink and file-type checks
+        rel = path.relative_to(root).as_posix()
+        try:
+            doc = parse_practice(path, root=root)
+        except (OSError, UnicodeDecodeError, ValueError):
+            continue  # reported by the encoding check
+        lines = doc.text.split("\n")
+
+        def at(line: int, lines: list[str] = lines) -> str:
+            return lines[line - 1].removesuffix("\r") if 0 < line <= len(lines) else ""
+
+        for issue in doc.issues:
+            findings.append(Finding(rel, issue.line, "rule-format", issue.message, issue.text))
+        prefixes: dict[str, int] = {}
+        for section in doc.sections:
+            if not section.tags:
+                findings.append(Finding(rel, section.line, "tag", f"section '{section.heading}' has no [tag]", at(section.line)))
+            for tag in section.tags:
+                if tag not in KNOWN_TAGS:
+                    findings.append(
+                        Finding(rel, section.line, "tag", f"unknown tag [{tag}] (known: {', '.join(KNOWN_TAGS)})", at(section.line))
+                    )
+            for issue in section.issues:
+                findings.append(Finding(rel, issue.line, "rule-format", issue.message, issue.text))
+            if not section.rules:
+                findings.append(Finding(rel, section.line, "rule-format", f"section '{section.heading}' has no rules", at(section.line)))
+            for rule in section.rules:
+                text = at(rule.line)
+                if rule.spans_lines:
+                    findings.extend(_assembled_rule_findings(rel, rule))
+                if rule.citation is None:
+                    findings.append(
+                        Finding(rel, rule.line, "citation", "rule has no citation: end it with (src: <source> #n) or (KB addition)", text)
+                    )
+                if not rule.id:
+                    findings.append(Finding(rel, rule.line, "rule-id", "rule has no {#id}", text))
+                    continue
+                if not RULE_ID_RE.match(rule.id):
+                    findings.append(
+                        Finding(rel, rule.line, "rule-id", f"malformed rule ID '{rule.id}' (lowercase segments joined by dots)", text)
+                    )
+                    continue
+                if rule.id.rsplit(".", 1)[-1] in _TLD_LIKE:
+                    findings.append(
+                        Finding(rel, rule.line, "rule-id", f"rule ID '{rule.id}' ends like a hostname; rename its last segment", text)
+                    )
+                if rule.id in seen_ids:
+                    findings.append(Finding(rel, rule.line, "rule-id", f"duplicate rule ID '{rule.id}' (also at {seen_ids[rule.id]})", text))
+                else:
+                    seen_ids[rule.id] = f"{rel}:{rule.line}"
+                prefix = rule.id.split(".", 1)[0]
+                prefixes.setdefault(prefix, rule.line)
+        if len(prefixes) > 1:
+            first, *others = sorted(prefixes, key=prefixes.get)
+            for prefix in others:
+                findings.append(
+                    Finding(rel, prefixes[prefix], "rule-id", f"rule ID prefix '{prefix}' differs from this file's '{first}'", at(prefixes[prefix]))
+                )
+    return findings
