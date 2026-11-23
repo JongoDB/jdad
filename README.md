@@ -40,7 +40,7 @@ The official Python MCP SDK v2 renamed `FastMCP` to `MCPServer`. This server use
 4. Bump the patch (or minor) version in lockstep (`pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json`, and the marketplace plugin entry). `./verify` fails if they differ.
 5. Do not put secrets, tokens, or credentials in this repo.
 
-See [CLAUDE.md](CLAUDE.md) for the same instructions aimed at agents working in this repo.
+Agents working in this repo follow [AGENTS.md](AGENTS.md), where every rule has an ID; [CLAUDE.md](CLAUDE.md) imports it and adds Claude Code notes.
 
 ## MCP server
 
