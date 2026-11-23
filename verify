@@ -46,6 +46,10 @@ uv build
 if command -v claude >/dev/null 2>&1; then
   echo "==> claude plugin validate"
   claude plugin validate .
+elif [[ -n "${CI:-}" ]]; then
+  # CI must not pass with the plugin unchecked; the workflow installs the CLI.
+  echo "==> claude plugin validate: FAILED (claude CLI not found and CI is set)" >&2
+  exit 1
 else
   echo "==> claude plugin validate: skipped (claude CLI not found on this machine; run it where the CLI is installed before merging)"
 fi
