@@ -10,8 +10,20 @@ It repeats the deny rules in .claude/settings.json on purpose: those match
 command text, while this scans the command with a small quote-aware
 scanner (command substitutions, heredocs, compound commands, `sh -c`,
 `eval`, `find -exec`, wrappers) and fails closed when it can't tell (an
-unclosed substitution, nesting too deep). It is not a sandbox: a script
-that opens a file itself is out of its reach. Reads the hook's stdin JSON
+unclosed substitution, nesting too deep). It also sees through leading
+VAR=value assignments, ( ) subshells, { } groups, if/for/while/case
+bodies and wrapper options that take a value (sudo -u USER).
+
+It is not a sandbox, and it does NOT catch (tested as known gaps):
+- a command name held in a variable (X=rm; $X -rf build) or an eval of a
+  variable's contents;
+- code that never appears as shell text: interpreters (python -c
+  "shutil.rmtree(...)"), decoded payloads (base64 -d | sh), a script
+  written and then run, aliases;
+- other destructive commands outside the deny list (find -delete, git
+  reset --hard, git clean -fdx);
+- Grep or Glob over a whole directory that contains secret files.
+Reads the hook's stdin JSON
 (tool_name, tool_input); to deny, prints hookSpecificOutput with
 permissionDecision "deny". Stdlib only; tests in tests/test_harness.py.
 """
@@ -35,7 +47,23 @@ SECRET_SAMPLES = (
 PATH_TOOLS = {"Read", "Edit", "Write", "NotebookEdit", "MultiEdit"}
 SEARCH_TOOLS = {"Grep", "Glob"}
 OPERATOR_CHARS = ";&|\n"
+# Subshell and grouping parens also end a simple command. ($(...), <(...),
+# >(...) and ((...)) are taken out by scan() before splitting.)
+SPLIT_CHARS = OPERATOR_CHARS + "()"
+# Words that can come before the real program in a simple command.
+KEYWORDS = {"if", "then", "elif", "else", "fi", "do", "done", "while", "until", "for", "select",
+            "case", "esac", "in", "function", "{", "}", "!", "coproc"}
+ASSIGNMENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\[[^]]*\])?\+?=.*", re.DOTALL)
 WRAPPERS = {"sudo", "env", "command", "builtin", "nohup", "nice", "time", "timeout", "stdbuf", "xargs", "exec"}
+# Wrapper options that take a separate value ("sudo -u USER cmd"): skip both words.
+WRAPPER_VALUE_OPTIONS = {
+    "sudo": {"-u", "-g", "-C", "-D", "-h", "-p", "-r", "-t", "-U", "-T", "--user", "--group", "--chdir", "--host", "--prompt"},
+    "env": {"-u", "-C", "--unset", "--chdir"},
+    "nice": {"-n", "--adjustment"},
+    "timeout": {"-s", "-k", "--signal", "--kill-after"},
+    "stdbuf": {"-i", "-o", "-e"},
+    "xargs": {"-I", "-i", "-n", "-P", "-L", "-l", "-s", "-d", "-E", "-a", "--max-args", "--max-procs", "--delimiter", "--arg-file"},
+}
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 # Programs that only print names: a glob argument to them reads nothing.
 LISTERS = {"ls", "find", "echo", "printf", "stat", "du", "tree"}
@@ -274,7 +302,7 @@ def _heredoc(command: str, i: int, out: list[str], inner: list[str]) -> int:
 def _commands(command: str) -> list[tuple[list[str], bool]]:
     """Split into simple commands, respecting quotes. Each comes with
     whether its output is piped into the next command."""
-    lex = shlex.shlex(command, posix=True, punctuation_chars=OPERATOR_CHARS)
+    lex = shlex.shlex(command, posix=True, punctuation_chars=SPLIT_CHARS)
     lex.whitespace = " \t\r"
     lex.whitespace_split = True
     lex.commenters = ""  # scan() already removed real comments; "#" here is text
@@ -285,7 +313,7 @@ def _commands(command: str) -> list[tuple[list[str], bool]]:
     commands: list[tuple[list[str], bool]] = []
     current: list[str] = []
     for token in tokens:
-        if token and set(token) <= set(OPERATOR_CHARS):
+        if token and set(token) <= set(SPLIT_CHARS):
             if current:
                 commands.append((current, token in ("|", "|&")))
             current = []
@@ -349,12 +377,19 @@ def _realistic_secret(name: str) -> bool:
 
 
 def _strip_wrappers(words: list[str]) -> list[str]:
+    """Drop what can precede the real program: shell keywords and braces
+    (if, do, {, !), VAR=value assignments, and wrapper programs."""
     while words:
-        if PurePath(words[0]).name not in WRAPPERS:
+        if words[0] in KEYWORDS or ASSIGNMENT_RE.fullmatch(words[0]):
+            words = words[1:]
+            continue
+        wrapper = PurePath(words[0]).name
+        if wrapper not in WRAPPERS:
             return words
         words = words[1:]
+        takes_value = WRAPPER_VALUE_OPTIONS.get(wrapper, set())
         while words and (words[0].startswith("-") or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*|\d+[smhd]?", words[0])):
-            words = words[1:]
+            words = words[2:] if words[0] in takes_value else words[1:]
     return words
 
 
