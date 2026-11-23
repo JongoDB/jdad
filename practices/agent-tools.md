@@ -3,7 +3,7 @@ Rules for the tools an agent calls: which to build, what they return, how they'r
 ## Choosing tools [design] [backend]
 - Build a few tools for high-impact workflows instead of wrapping every API endpoint. (src: anthropic-tools #10) {#tools.choose.few-targeted}
 - Prefer a task-level tool, such as a search, over one that lists everything. (src: anthropic-tools #11) {#tools.choose.search-over-list}
-- Fold a multi-step lookup the agent always repeats into one tool. (src: anthropic-tools #12) {#tools.choose.consolidate}
+- Fold a multi-step lookup the agent frequently chains into one tool. (src: anthropic-tools #12) {#tools.choose.consolidate}
 - Give each tool one clear purpose that no other tool overlaps. (src: anthropic-tools #13) {#tools.choose.distinct-purpose}
 - Prefix related tool names by service and resource. (src: anthropic-tools #14) {#tools.choose.namespace}
   Applies when: an agent sees tools from more than one server or service.

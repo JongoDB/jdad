@@ -14,7 +14,7 @@ cite_as: anthropic-tools
 - What is missing: no code or harness for the evaluations, results only as charts, and little on security, permissions or auth. The one hard number is that Claude Code caps a tool response at 25,000 tokens by default.
 ## The 24 items
 1. Stand up a quick prototype of the tools and try them locally, since it's hard to predict which tools agents will find ergonomic.
-2. Base evaluation tasks on real uses and realistic data, not simplistic sandboxes.
+2. Base evaluation tasks on real uses and realistic data, not simplistic sandboxes; strong tasks may need multiple tool calls, potentially dozens.
 3. Pair each task with a verifiable outcome, without verifiers so strict that they reject correct answers.
 4. Track more than accuracy: tool-call runtime, number of calls, token use and tool errors.
 5. Have evaluation agents write their reasoning and feedback before their tool calls.
@@ -24,7 +24,7 @@ cite_as: anthropic-tools
 9. Use held-out test tasks so improvements don't overfit the evaluation.
 10. Don't just wrap existing API endpoints; build a few targeted tools for high-impact workflows.
 11. Prefer a task-level tool (search_contacts, message_contact) over a list-everything tool (list_contacts).
-12. Consolidate multi-step operations into one tool, such as get_customer_context instead of several get and list calls.
+12. Consolidate frequently chained, multi-step operations into one tool, such as get_customer_context instead of several get and list calls.
 13. Give each tool a clear, distinct purpose; too many or overlapping tools distract agents.
 14. Namespace related tools with common prefixes by service and by resource.
 15. Return high-signal fields such as names and file types, and leave out low-level identifiers (uuids, image URLs, mime types).
