@@ -16,10 +16,14 @@ through leading VAR=value assignments (their values are checked too),
 that take a value (sudo -u USER), backslash-newline continuations, GNU
 long-option prefixes (rm --rec --forc), variables the command itself
 assigns or defaults ("F=-rf; rm $F", "rm ${F:--rf}"), and code a shell
-reads from stdin: a here-string, a heredoc, or echo/printf piped in. A
-shell fed from any other pipe or a file is denied (its code can't be
-seen). Secret names are matched case-insensitively (.ENV is .env on
-macOS).
+reads from stdin: a here-string, a heredoc, or echo/printf piped in
+(redirections count anywhere in the command, with fd prefixes, and
+- or /dev/stdin as the script). A shell fed from any other pipe, a file
+or a descriptor is denied (its code can't be seen), and so is printf or
+echo text with escapes or a format that's run as code (the guard
+doesn't decode it). Every value a variable is given counts, and
+${NAME+word} on a variable the command doesn't set may be word. Secret
+names are matched case-insensitively (.ENV is .env on macOS).
 
 It is not a sandbox, and it does NOT catch (tested as known gaps):
 - code that never appears as shell text: interpreters (python -c
@@ -100,6 +104,9 @@ TIME_BUDGET_SECONDS = 5  # the hook denies if analysis takes longer (a timeout w
 # these markers so only unquoted ones count as globs.
 QUOTED_GLOB = {"*": "\x01", "?": "\x02", "[": "\x03"}
 _RESTORE = str.maketrans({v: k for k, v in QUOTED_GLOB.items()})
+# The "&" in a redirection (2>&1, <&3, &>file) isn't the background operator;
+# scan() swaps it for this marker so the splitter keeps the word whole.
+REDIRECT_AMP = "\x04"
 
 
 def restore(text: str) -> str:
@@ -107,6 +114,12 @@ def restore(text: str) -> str:
 
 
 REDIRECTS = (">", ">>", "<", "1>", "2>", "&>", ">|")
+# A redirection word: optional fd, operator, and (attached) target. A bare
+# operator takes the next word as its target.
+REDIRECT_WORD_RE = re.compile(r"(\d*)(<<<|<<-|<<|<>|<&|>&|&>>|&>|>>|>\||<|>)(.*)", re.DOTALL)
+# Operands that make a shell read its script from stdin.
+STDIN_OPERANDS = {"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"}
+MAX_VARIANTS = 8  # expansions of one word checked at most
 WORD_START = " \t\n;|&("
 
 
@@ -247,6 +260,12 @@ def scan(command: str) -> tuple[str, list[str], list[str]]:
             inner.extend(_body_substitutions(command[i + 2:end]))
             out.append(command[i:end + 1])
             i = end + 1
+        elif c in "<>" and command.startswith("&", i + 1):
+            out.append(c + REDIRECT_AMP)
+            i += 2
+        elif c == "&" and command.startswith(">", i + 1):
+            out.append(REDIRECT_AMP + ">")
+            i += 2
         elif command.startswith("<<<", i):
             out.append("<<<")
             i += 3
@@ -341,6 +360,7 @@ def _commands(command: str) -> list[tuple[list[str], bool]]:
         tokens = list(lex)
     except ValueError as exc:
         raise Unclear(f"can't split the command ({exc})") from None
+    tokens = [token.replace(REDIRECT_AMP, "&") for token in tokens]
     commands: list[tuple[list[str], bool]] = []
     current: list[str] = []
     for token in tokens:
@@ -410,13 +430,17 @@ def _realistic_secret(name: str) -> bool:
 
 def _skip_prefix(words: list[str]) -> list[str]:
     """Drop shell keywords and braces (if, do, {, !), "function NAME {" and
-    "coproc NAME {", and VAR=value assignments. Shared by every caller so
+    "coproc NAME {", VAR=value assignments and leading redirections. Shared by every caller so
     the parses can't drift apart."""
     while words:
+        redirect = REDIRECT_WORD_RE.fullmatch(words[0])
         if words[0] in ("function", "coproc") and len(words) > 2 and words[2] in ("{", "("):
             words = words[2:]
         elif words[0] in KEYWORDS or ASSIGNMENT_RE.fullmatch(words[0]):
             words = words[1:]
+        elif redirect:
+            # ">/dev/null rm -rf x": a redirection may come before the program.
+            words = words[1:] if redirect.group(3) else words[2:]
         else:
             break
     return words
@@ -475,38 +499,52 @@ def _push_reason(args: list[str]) -> str | None:
     return None
 
 
-def _expand(word: str, variables: dict[str, str]) -> str:
-    """Expand $NAME, ${NAME} and ${NAME<op>word} with what the command itself
-    assigned. An unknown variable with a default ("${F:--rf}") becomes the
-    default, since that's what runs when it's unset."""
-
-    def sub(match: re.Match) -> str:
-        name = match.group(1) or match.group(4)
-        op, word_ = match.group(2), match.group(3) or ""
-        value = variables.get(name)
-        if op in ("-", ":-", "=", ":="):
-            return value if value else word_
-        if op in ("+", ":+"):
-            return word_ if value else ""
-        return value if value is not None else match.group(0)
-
-    return VARIABLE_RE.sub(sub, word)
+def _reference_values(match: re.Match, variables: dict[str, list[str]]) -> list[str]:
+    """What one $NAME / ${NAME<op>word} can expand to. Every value the command
+    gives the variable counts (order isn't tracked). For a variable the
+    command doesn't set, the environment may set it: ${NAME+word} may be
+    word, and ${NAME:-word} is word when it's unset."""
+    name = match.group(1) or match.group(4)
+    op, word = match.group(2), match.group(3) or ""
+    values = variables.get(name)
+    if op in ("-", ":-", "=", ":="):
+        return [v or word for v in values] if values else [word]
+    if op in ("+", ":+"):
+        return [word] if values else ["", word]
+    return list(values) if values else [match.group(0)]
 
 
-def _expand_words(words: list[str], variables: dict[str, str]) -> list[str]:
+def _expand(word: str, variables: dict[str, list[str]]) -> list[str]:
+    """Every expansion of a word (at most MAX_VARIANTS)."""
+    variants, pos = [""], 0
+    for match in VARIABLE_RE.finditer(word):
+        literal = word[pos:match.start()]
+        options = _reference_values(match, variables)
+        variants = [v + literal + o for v in variants for o in options][:MAX_VARIANTS]
+        pos = match.end()
+    out: list[str] = []
+    for variant in variants:
+        if variant + word[pos:] not in out:
+            out.append(variant + word[pos:])
+    return out
+
+
+def _expand_words(words: list[str], variables: dict[str, list[str]]) -> list[str]:
     """Expand each word. Only a word that is nothing but one variable
     reference ("$FLAGS", "${F:--rf}") is split into several words, as the
     shell splits an unquoted expansion; any other word stays one word, so
-    message text after -m or --body is still skipped as a whole."""
+    message text after -m or --body is still skipped as a whole. When a
+    word has several possible expansions, all of them are kept."""
     out: list[str] = []
     for word in words:
-        expanded = _expand(word, variables)
-        if expanded == word:
+        variants = _expand(word, variables)
+        if variants == [word]:
             out.append(word)
         elif VARIABLE_RE.fullmatch(word):
-            out.extend(expanded.split())
+            for variant in variants:
+                out.extend(variant.split())
         else:
-            out.append(expanded)
+            out.extend(variants)
     return out
 
 
@@ -530,7 +568,7 @@ def _assignments(words: list[str]) -> list[tuple[str, str]]:
     return pairs
 
 
-def _printed_texts(words: list[str], variables: dict[str, str]) -> list[str] | None:
+def _printed_texts(words: list[str], variables: dict[str, list[str]]) -> list[str] | None:
     """What an echo/printf command prints (joined both ways, since printf
     puts each argument on its own line with '%s\\n'); None for any other
     program."""
@@ -541,20 +579,28 @@ def _printed_texts(words: list[str], variables: dict[str, str]) -> list[str] | N
     if PurePath(words[0]).name == "echo":
         while args and re.fullmatch(r"-[neE]+", args[0]):
             args = args[1:]
+    # printf formats and backslash escapes (printf, echo -e, zsh's echo) can
+    # print something other than their text: "printf 'r\\x6d'" prints "rm".
+    if any("\\" in a for a in args) or (PurePath(words[0]).name == "printf" and any("%" in a for a in args)):
+        raise Unclear("printf/echo text with escapes or a format, run as code")
     return [" ".join(args), "\n".join(args)]
 
 
-def _as_code(text: str, variables: dict[str, str]) -> list[str]:
+def _as_code(text: str, variables: dict[str, list[str]]) -> list[str]:
     """Shell code plus what echo/printf print inside its substitutions:
     'bash -c "$(printf 'rm -rf x')"' runs the printed text."""
     texts = [text]
     try:
         _, inner, _ = scan(text)
-        for sub in inner:
-            for words, _piped in _commands(scan(sub)[0]):
-                texts.extend(_printed_texts(words, variables) or [])
     except Unclear:
-        pass  # bash_reason(text) reports it
+        return texts  # bash_reason(text) reports it
+    for sub in inner:
+        try:
+            commands = _commands(scan(sub)[0])
+        except Unclear:
+            continue  # bash_reason(text) reports it
+        for words, _piped in commands:
+            texts.extend(_printed_texts(words, variables) or [])  # Unclear propagates: deny
     return texts
 
 
@@ -577,56 +623,61 @@ def _wrapper_code(wrapper: str, args: list[str]) -> list[str]:
 
 
 def _stdin_code(words: list[str], producer: list[str] | None, bodies: list[str],
-                variables: dict[str, str]) -> tuple[list[str], str | None]:
+                variables: dict[str, list[str]]) -> tuple[list[str], str | None]:
     """If this command runs a shell that reads its code from stdin, return
-    (code it reads, reason to deny when that code can't be seen)."""
-    words = _strip_wrappers(_expand_words([restore(w) for w in words], variables))
-    if not words or PurePath(words[0]).name not in SHELLS:
+    (code it reads, reason to deny when that code can't be seen).
+    Redirections count wherever they are ("<<<'x' bash", "bash 0<<<'x'")."""
+    words = _expand_words([restore(w) for w in words], variables)
+    rest: list[str] = []
+    herestrings: list[str] = []
+    heredoc = from_file = False
+    k = 0
+    while k < len(words):
+        match = REDIRECT_WORD_RE.fullmatch(words[k])
+        if not match:
+            rest.append(words[k])
+            k += 1
+            continue
+        fd, op, target = match.groups()
+        if not target and op not in ("<<", "<<-"):
+            target = words[k + 1] if k + 1 < len(words) else ""
+            k += 1
+        k += 1
+        if fd not in ("", "0") or op.startswith((">", "&")):
+            continue  # an output or another descriptor
+        if op == "<<<":
+            herestrings.append(target)
+        elif op in ("<<", "<<-"):
+            heredoc = True
+        else:
+            from_file = True  # <, <> or <&: a file or descriptor the guard can't see
+    rest = _strip_wrappers(rest)
+    if not rest or PurePath(rest[0]).name not in SHELLS:
         return [], None
-    codes: list[str] = []
-    from_file = operand = reads_stdin = False
-    args, k = words[1:], 0
+    operand = reads_stdin = False
+    args, k = rest[1:], 0
     while k < len(args):
         arg = args[k]
         if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg):
             return [], None  # sh -c CODE: checked by _nested_commands
-        if arg == "<<<":
-            codes.extend(args[k + 1:k + 2])
+        if arg in ("-o", "+o", "-O", "+O"):
             k += 2
             continue
-        if arg.startswith("<<<"):
-            codes.append(arg[3:])
-        elif arg.startswith("<<"):
-            codes.extend(bodies)  # a heredoc is the shell's stdin
-        elif arg in ("<", "0<"):
-            from_file, k = True, k + 2
-            continue
-        elif arg.startswith("<"):
-            from_file = True
-        elif arg in REDIRECTS:
-            k += 2
-            continue
-        elif ">" in arg:
-            pass  # an output redirect
-        elif arg in ("-o", "+o", "-O", "+O"):
-            k += 2
-            continue
-        elif arg == "-s":
+        if arg in STDIN_OPERANDS or arg == "-s":
             reads_stdin = True
-        elif arg.startswith(("-", "+")):
-            pass
-        else:
+        elif not arg.startswith(("-", "+")):
             operand = True  # a script file: a known gap (its text isn't visible)
         k += 1
     if operand and not reads_stdin:
         return [], None
+    codes = list(herestrings) + (list(bodies) if heredoc else [])
     if producer is not None:
         printed = _printed_texts(producer, variables)
         if printed is None:
             return codes, "a shell reads code from a pipe the guard can't see"
         codes.extend(printed)
     if from_file:
-        return codes, "a shell reads code from a file the guard can't see"
+        return codes, "a shell reads code from a file or descriptor the guard can't see"
     return codes, None
 
 
@@ -667,7 +718,7 @@ def _scanned_words(program: str, words: list[str], consumed: bool = False) -> li
     return out
 
 
-def _nested_commands(program: str, args: list[str], variables: dict[str, str]) -> list[str]:
+def _nested_commands(program: str, args: list[str], variables: dict[str, list[str]]) -> list[str]:
     nested: list[str] = []
     if program in SHELLS:
         for index, arg in enumerate(args):
@@ -700,16 +751,24 @@ def _after_first_wrapper(words: list[str]) -> list[str] | None:
 
 
 def _simple_reason(raw_words: list[str], depth: int, piped: bool = False, scan_tail: bool = True,
-                   consumed: bool = False, variables: dict[str, str] | None = None) -> str | None:
-    variables = variables or {}
+                   consumed: bool = False, variables: dict[str, list[str]] | None = None) -> str | None:
+    try:
+        return _simple_reason_inner(raw_words, depth, piped, scan_tail, consumed, variables or {})
+    except Unclear as exc:
+        return f"can't check this command safely ({exc})"
+
+
+def _simple_reason_inner(raw_words: list[str], depth: int, piped: bool, scan_tail: bool,
+                         consumed: bool, variables: dict[str, list[str]]) -> str | None:
     if len(raw_words) > MAX_WORDS:
         return f"command too long to check ({len(raw_words)} words, limit {MAX_WORDS})"
     # An assignment's value can name a secret ("f=.env; cat $f"): check it here,
     # since the prefix is skipped below.
     for _name, value in _assignments(raw_words):
-        reason = _token_reason(_expand(value, variables), lister=False, redirect=False)
-        if reason:
-            return reason
+        for variant in _expand(value, variables):
+            reason = _token_reason(variant, lister=False, redirect=False)
+            if reason:
+                return reason
     # Flags or the program held in a variable the command set ("F=-rf; rm $F").
     raw_words = _expand_words(raw_words, variables)
     head = _skip_prefix([restore(w) for w in raw_words])
@@ -772,7 +831,7 @@ def _simple_reason(raw_words: list[str], depth: int, piped: bool = False, scan_t
 
 
 def bash_reason(command: str, depth: int = 0, consumed: bool = False,
-                variables: dict[str, str] | None = None) -> str | None:
+                variables: dict[str, list[str]] | None = None) -> str | None:
     """consumed: the command's output is used (inside $(...) or `...`), so a
     lister's names feed another command and get no exemption.
     variables: what enclosing code assigned, for $NAME expansion."""
@@ -785,10 +844,13 @@ def bash_reason(command: str, depth: int = 0, consumed: bool = False,
         return f"can't check this command safely ({exc})"
     # Every assignment in the command, wherever it is ("F=-rf; rm $F"). Order
     # isn't tracked; a later assignment counts too, which is the safe side.
-    variables = dict(variables or {})
+    variables = {name: list(values) for name, values in (variables or {}).items()}
     for words, _piped in commands:
         for name, value in _assignments(words):
-            variables[name] = _expand(value, variables)
+            known = variables.setdefault(name, [])
+            for variant in _expand(value, variables):
+                if variant not in known:
+                    known.append(variant)
     for sub in inner:
         reason = bash_reason(sub, depth + 1, consumed=True, variables=variables)
         if reason:
@@ -800,14 +862,17 @@ def bash_reason(command: str, depth: int = 0, consumed: bool = False,
             return reason
         # A shell reading code from stdin runs whatever is piped, here-stringed
         # or heredoc'd into it.
-        codes, unseen = _stdin_code(words, producer, bodies, variables)
-        if unseen:
-            return unseen
-        for code in codes:
-            for text in _as_code(code, variables):
-                reason = bash_reason(text, depth + 1, consumed=piped or consumed, variables=variables)
-                if reason:
-                    return reason
+        try:
+            codes, unseen = _stdin_code(words, producer, bodies, variables)
+            if unseen:
+                return unseen
+            texts = [text for code in codes for text in _as_code(code, variables)]
+        except Unclear as exc:
+            return f"can't check this command safely ({exc})"
+        for text in texts:
+            reason = bash_reason(text, depth + 1, consumed=piped or consumed, variables=variables)
+            if reason:
+                return reason
         producer = words if piped else None
     return None
 
