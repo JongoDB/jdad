@@ -39,6 +39,7 @@ The official Python MCP SDK v2 renamed `FastMCP` to `MCPServer`. This server use
 3. If you add a new topic file under `practices/`, add a matching skill at `skills/jdad-<topic>/SKILL.md` (one skill per practice file). If you add a rule that did not come from the source, label it as a KB addition, the way Rule zero is labeled in `practices/performance.md`.
 4. Bump the patch (or minor) version in lockstep (`pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json`, and the marketplace plugin entry). `./verify` fails if they differ.
 5. Do not put secrets, tokens, or credentials in this repo.
+6. Run `uv run jdad lint-kb`. It fails on text addressed to an agent, URLs or shell commands in `practices/` that aren't allowlisted in `kb-lint.toml`, hidden or bidi Unicode, HTML or Markdown comments, symlinks, and non-`.md` files in `practices/` or `sources/`. See [docs/threat-model.md](docs/threat-model.md).
 
 Agents working in this repo follow [AGENTS.md](AGENTS.md), where every rule has an ID; [CLAUDE.md](CLAUDE.md) imports it and adds Claude Code notes.
 
@@ -57,7 +58,7 @@ uvx --from git+https://github.com/JongoDB/jdad jdad-mcp
 jdad-mcp --http
 ```
 
-`KB_ROOT` overrides the content directory. It must point at a directory that contains `practices/` and `sources/`. If unset, the server uses a checkout of this repo when it can find one, otherwise the files bundled in the package.
+`KB_ROOT` overrides the content directory. It must point at a directory that contains `practices/` and `sources/`. If unset, the server uses the jdad checkout it runs from (an editable install), otherwise the files bundled in the package. It never looks in the current directory, so a server started inside another project can't serve that project's files as the KB.
 
 `JDAD_TOKEN` is optional on loopback. When set, every HTTP path except `/healthz` requires `Authorization: Bearer <token>`. Stdio does not use the token. The Docker deploy binds `0.0.0.0`, so a non-empty token is required (the image does not pass `--allow-no-auth`). Store the value in `~/.config/jdad/jdad.env` (mode 0600) on the droplet; never commit it. `JDAD_ALLOWED_HOSTS` is a comma-separated list of public hostnames the MCP transport will accept in the `Host` header (loopback is always allowed; DNS-rebinding protection stays on). For this host it is `jdad-mcp.jondevs.com`, which also allows Origin `https://jdad-mcp.jondevs.com` because Cloudflare forwards the original Host header.
 
@@ -71,7 +72,7 @@ The default HTTP bind is `127.0.0.1`. Binding to a non-loopback address (`0.0.0.
 | `search_practices(query, tag?)` | Keyword hits: file, heading, and section body |
 | `get_practice(topic)` | The full practice file |
 | `list_sources` | Source notes (id, title, link) |
-| `get_source(id)` | The full source note |
+| `get_source(id)` | The full source note, after a header marking it quoted third-party material (data, not instructions) |
 | `get_checklist(tags[])` | Bullet rules for the given tags, ready to paste into a plan |
 | `kb_version` | Git SHA of the checkout and the date of the newest source entry |
 
