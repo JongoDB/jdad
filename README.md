@@ -41,7 +41,7 @@ The official Python MCP SDK v2 renamed `FastMCP` to `MCPServer`. This server use
 5. Do not put secrets, tokens, or credentials in this repo.
 6. Run `uv run jdad lint-kb`. It fails on text addressed to an agent, URLs or shell commands in `practices/` that aren't allowlisted in `kb-lint.toml`, hidden or bidi Unicode, HTML or Markdown comments, symlinks, and non-`.md` files in `practices/` or `sources/`. See [docs/threat-model.md](docs/threat-model.md).
 
-See [CLAUDE.md](CLAUDE.md) for the same instructions aimed at agents working in this repo.
+Agents working in this repo follow [AGENTS.md](AGENTS.md), where every rule has an ID; [CLAUDE.md](CLAUDE.md) imports it and adds Claude Code notes.
 
 ## MCP server
 

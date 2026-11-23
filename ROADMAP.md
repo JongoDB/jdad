@@ -23,19 +23,21 @@ Legend: **Needs Jon** = needs a decision, access, or money from Jon before or du
 - [x] **P0.2 MCP server, HTTP transport, Claude Code plugin** (#1, JON-1330): `jdad-mcp` with 7 read-only tools, `kb://practices/{name}`, `apply-kb` prompt, bearer auth, host allowlist, `/jdad plan|review|perf|add`, `jdad-performance` skill, `./verify`, systemd deploy.
 - [x] **P0.3 Docker deploy merged** (#2, 2022a8a). Acceptance: #2 is merged to `main` (merge commit 2022a8a), and the full `./verify`, including `tests/test_docker.sh`, passes on this roadmap PR's head after it merges `main`. Merging doesn't mean deployed; that is P0.5.
 - [x] **P0.4 Roadmap, vision, research, ADRs** (this PR).
-- [ ] **P0.5 Hosted endpoint deployed and proven** ([ADR 0005](docs/adr/0005-hosted-deploy-cloudflare-full-strict.md))
+- [x] **P0.5 Hosted endpoint deployed and proven** ([ADR 0005](docs/adr/0005-hosted-deploy-cloudflare-full-strict.md); deployed 2026-11-22 2:35 PM ET at c90178b, JON-1330)
   - Acceptance: on the droplet, the running container's `JDAD_GIT_SHA` equals `main`'s head SHA; through `https://jdad-mcp.jondevs.com/mcp` with a valid token, `initialize`, `tools/list` and one `tools/call` return 200; with no token, 401; a request with a non-allowlisted `Host` gets 421 at the origin; `curl` with the Cloudflare Origin CA root as `--cacert` verifies the origin certificate; Cloudflare's SSL mode for the host is Full (strict). Tokens redacted in the PR. When this passes, ADR 0005 moves to Accepted.
   - Depends on: P0.3. **Needs Jon:** droplet access and the Cloudflare Configuration Rule.
+  - Evidence (2026-11-22, 2:35–2:36 PM ET, tokens redacted): container `jdad-jdad-1` healthy, image `jdad:c90178b88e9a6ea761ae7f5fb46c11b09e1469ae`, in-container `JDAD_GIT_SHA` = `main` head c90178b; via `https://jdad-mcp.jondevs.com` (served by Cloudflare): `/healthz` 200 `{"status":"ok"}`, `/mcp` no token 401, wrong token 401, valid token `initialize` 200, `notifications/initialized` 202, `tools/list` 200 (all 7 tools), `tools/call kb_version` 200 (sha c90178b, dirty false); at the origin: `Host: evil.example.com` 421; `curl --cacert origin_ca_rsa_root.pem` against the origin verifies (ssl_verify_result 0); port 80 closed; container `read_only` true, `cap_drop` ALL, `no-new-privileges`, uid 1000:1000. Cloudflare SSL mode for the host is Full (strict), shown by Jon's dashboard screenshots of the Configuration Rule. Raw outputs and a description of the screenshots: [docs/evidence/p0.5](docs/evidence/p0.5/README.md).
 
 ## Phase 1: One source of truth
 
 Goal: before adding features, make the repo itself cross-tool and give the KB and skills a schema that later phases build on.
 
-- [ ] **P1.1 AGENTS.md becomes the canonical instructions file**
+- [x] **P1.1 AGENTS.md becomes the canonical instructions file**
   - Goal: Codex, Cursor and Grok Build read the full repo rules, not just Claude Code. ([ADR 0004](docs/adr/0004-agents-md-canonical-instructions.md))
   - Deliverables: move the rules from `CLAUDE.md` into `AGENTS.md`; `CLAUDE.md` becomes `@AGENTS.md` plus Claude-only notes (plugin validate, `userConfig`); a test that enforces the sizes below.
   - Acceptance: `AGENTS.md` ≤ 120 lines and < 32 KiB; `CLAUDE.md` ≤ 40 lines and contains `@AGENTS.md`; every normative rule has an ID (`R-<area>-<n>`) listed in a table in `AGENTS.md`, and a test asserts each ID appears in exactly one of `AGENTS.md` or `CLAUDE.md`'s "Claude-only" section; `./verify` passes. Runtime: on one installed CLI, a discovery run lists `AGENTS.md`: either `grok inspect --json` output names it, or `codex -c log_dir=./.codex-log --ask-for-approval never "Show which instruction files are active."` run from the repo root leaves `./.codex-log/codex-tui.log` containing `AGENTS.md` (the audit method in Codex's AGENTS.md guide); without it the item stays open as runtime unverified.
   - Depends on: P0.3 (done; both PRs edit `CLAUDE.md`).
+  - Evidence (2026-11-22, JON-1332): `tests/test_instructions.py` enforces the sizes and one definition per rule ID (26 IDs; 4 Claude-only). `GROK_FOLDER_TRUST=0 grok inspect --json` (Grok 1.0.77, folder-trust gate off for that one process, nothing persisted) lists both `AGENTS.md` (6,419 bytes) and `CLAUDE.md` (946 bytes) under `projectInstructions`.
 - [ ] **P1.2 Practice schema and stable rule IDs**
   - Goal: every rule is addressable, so checklists, reviews and dedupe can cite `perf.db.n-plus-one` instead of a bullet's position.
   - Deliverables: `docs/kb-schema.md` (rule ID format, required tag, `src:` citation, optional `applies-when`, `origin: source|kb-addition`); migrate `practices/performance.md`; `jdad lint-kb` command (stdlib only) wired into `./verify`; `kb.py` parses IDs.
