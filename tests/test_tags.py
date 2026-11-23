@@ -71,3 +71,14 @@ def test_every_place_that_lists_tags_lists_all_twelve(path: str) -> None:
     text = (REPO_ROOT / path).read_text()
     missing = [tag for tag in KNOWN_TAGS if tag not in text]
     assert not missing, f"{path} doesn't mention {missing}"
+
+
+@pytest.mark.parametrize("place", ["search_practices", "get_checklist", "apply-kb"])
+def test_each_tool_text_that_lists_tags_lists_all_twelve(place: str) -> None:
+    """Checker 12B (JON-1360): each docstring or prompt that lists the tags
+    lists every one, not just server.py as a whole."""
+    from jdad import server
+
+    text = server.apply_kb() if place == "apply-kb" else getattr(server, place).__doc__
+    missing = [tag for tag in KNOWN_TAGS if tag not in text]
+    assert not missing, f"{place} doesn't list {missing}"
