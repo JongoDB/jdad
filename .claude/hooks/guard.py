@@ -62,7 +62,8 @@ WRAPPER_VALUE_OPTIONS = {
     "nice": {"-n", "--adjustment"},
     "timeout": {"-s", "-k", "--signal", "--kill-after"},
     "stdbuf": {"-i", "-o", "-e"},
-    "xargs": {"-I", "-i", "-n", "-P", "-L", "-l", "-s", "-d", "-E", "-a", "--max-args", "--max-procs", "--delimiter", "--arg-file"},
+    # Not -i, -l, -e: their (optional) value is always attached ("-i{}").
+    "xargs": {"-I", "-n", "-P", "-L", "-s", "-d", "-E", "-a", "--max-args", "--max-procs", "--delimiter", "--arg-file"},
 }
 SHELLS = {"sh", "bash", "zsh", "dash", "ksh"}
 # Programs that only print names: a glob argument to them reads nothing.
@@ -313,7 +314,7 @@ def _commands(command: str) -> list[tuple[list[str], bool]]:
     commands: list[tuple[list[str], bool]] = []
     current: list[str] = []
     for token in tokens:
-        if token and set(token) <= set(SPLIT_CHARS):
+        if token and (set(token) <= set(SPLIT_CHARS) or token in ("{", "}")):
             if current:
                 commands.append((current, token in ("|", "|&")))
             current = []
@@ -388,8 +389,14 @@ def _strip_wrappers(words: list[str]) -> list[str]:
             return words
         words = words[1:]
         takes_value = WRAPPER_VALUE_OPTIONS.get(wrapper, set())
-        while words and (words[0].startswith("-") or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*|\d+[smhd]?", words[0])):
-            words = words[2:] if words[0] in takes_value else words[1:]
+        while words and (words[0].startswith("-") or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*|\d+(\.\d+)?[smhd]?", words[0])):
+            option = words[0]
+            if option == "--":
+                words = words[1:]
+                break
+            # A short-option cluster ("-nu") takes a value if its last letter does.
+            last = "-" + option[-1] if option.startswith("-") and not option.startswith("--") else option
+            words = words[2:] if option in takes_value or last in takes_value else words[1:]
     return words
 
 
@@ -463,6 +470,8 @@ def _simple_reason(raw_words: list[str], depth: int, piped: bool = False) -> str
     if not raw_words:
         return None
     words = [restore(w) for w in raw_words]
+    if words[0].startswith("-"):
+        return f"can't tell which program runs (an option, {words[0]!r}, is left where the program should be)"
     program = PurePath(words[0]).name
     args = words[1:]
     for inner in _nested_commands(program, args):
