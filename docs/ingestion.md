@@ -45,6 +45,10 @@ Jon's "nothing from the transcripts in the public repo" (2026-11-22) means **Cla
 
 - any KB text tries to steer an agent, links or runs things in `practices/` without an allowlist entry, or hides characters or comments ([threat model](threat-model.md)).
 
+## Keeping sources fresh
+
+`uv run jdad freshness` lists every source more than a year old (by `posted`, or `retrieved` when that's `unknown`) whose topic also cites a newer source, one `old -> new [topic]` line per pair. It's a prompt to re-check the old source's rules, not a failure: it always exits 0 unless you pass `--strict`, and `./verify` doesn't run it, because the result changes as time passes without any commit. A source that no rule cites has no topic and is never listed.
+
 ## Quoting, not copying
 
 The repo is going public (Jon, 2026-11-22), so a source file is **a record of the extractable practices, not a copy of the work.** Write the numbered items as short quotes, close paraphrase or timestamps, a line each. Short lists of tips, like the breakingbreach reel's 31 one-line items, can be listed as they appear. Never paste a full transcript, an article's body, or long passages. Keep the link so readers can go to the original. (The pre-public scrub, `docs/reviews/2026-11-22-pre-public-scrub.md` in PR #12, "Third-party text and licence risk".)
