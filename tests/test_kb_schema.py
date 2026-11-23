@@ -211,14 +211,16 @@ def test_search_hits_carry_structured_rules() -> None:
 
 
 def test_performance_skill_mirrors_the_practice_rules() -> None:
-    """Until the skill compiler (P1.5) exists, the hand copy must match exactly (red-team L6)."""
+    """The skill's rules are a hand-written copy of the practice file's (in
+    catalog/, compiled into skills/ by `jdad build`), so they must match
+    exactly (red-team L6). Frontmatter is skipped: its indented lines
+    (`  generated: ...`) aren't rules."""
 
     def rule_lines(path: Path) -> list[str]:
-        return [
-            line
-            for line in path.read_text().splitlines()
-            if line.startswith(("- ", "  ", "## "))
-        ]
+        lines = path.read_text().splitlines()
+        if lines and lines[0] == "---":
+            lines = lines[lines.index("---", 1) + 1 :]
+        return [line for line in lines if line.startswith(("- ", "  ", "## "))]
 
     practice = rule_lines(REPO_ROOT / "practices" / "performance.md")
     skill = rule_lines(REPO_ROOT / "skills" / "jdad-performance" / "SKILL.md")
