@@ -13,11 +13,14 @@ content that tries to steer an agent rather than inform it:
   Base64 runs (standard or URL-safe, 24+ characters) that decode to text
   matching these patterns are flagged in every KB tree.
 - ``url``: a URL in practices/ whose host isn't in ``url_allow``, including
-  a bare domain with no scheme or ``www`` (``evil.example.com/x``) and a bare
-  IP address (``203.0.113.7:8080/x``, ``[2001:db8::1]``); only a file name
-  with a common extension and no path is exempt. In every KB tree, a
-  Markdown link (inline or reference) whose scheme isn't http or https
-  (``javascript:``, ``data:``), after undoing entities and whitespace.
+  a bare domain with no scheme or ``www`` (``evil.example.com/x``), a
+  protocol-relative ``//host``, and a bare IP address (decimal, octal or hex
+  IPv4 parts, IPv6 with or without brackets, IPv4-mapped), normalized with
+  ``ipaddress``; only a file name with a common extension and no path is
+  exempt. In every KB tree, a Markdown link (inline or reference, including
+  a destination after a line break) whose scheme isn't http or https
+  (``javascript:``, ``data:``), after undoing backslash escapes, entities and
+  whitespace.
 - ``html``: a raw HTML tag (``<img onerror=...>``, ``<span hidden>``). A tag
   with attributes or a real HTML element counts even inside code; only
   unknown bare tags in code (``<T>``) are exempt. practices/ and sources/.
@@ -60,6 +63,7 @@ import base64
 import binascii
 import hashlib
 import html
+import ipaddress
 import re
 import tomllib
 import unicodedata
@@ -211,14 +215,19 @@ _LETTER_RUN_RE = re.compile(r"[^\W\d_]+")
 # Only http(s) or a relative link (no scheme) is allowed; javascript:, data:,
 # vbscript: and the rest are flagged, after undoing entity-encoding and
 # stripping whitespace and control characters (browsers ignore them).
+# Checked on the whole file, since a destination may follow a line break.
 _MD_INLINE_DEST_RE = re.compile(r"\]\(\s*(<[^>\n]*>|[^)\s]+)")
-_MD_REF_DEST_RE = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*(<[^>\n]*>|\S+)")
+_MD_REF_DEST_RE = re.compile(r"^[ ]{0,3}\[[^\]\n]+\]:[ \t]*(?:\n[ \t]*)?(<[^>\n]*>|\S+)", re.MULTILINE)
+_MD_BACKSLASH_ESCAPE_RE = re.compile(r"\\([!-/:-@\[-`{-~])")
 _SCHEME_RE = re.compile(r"([a-z][a-z0-9+.-]*):")
 # Bare IP addresses in practices: dotted IPv4 (four octets, with an optional
 # port and path) and bracketed IPv6. Version numbers have fewer parts.
-_OCTET = r"(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)"
-_BARE_IPV4_RE = re.compile(rf"(?<![\w.:/-])({_OCTET}(?:\.{_OCTET}){{3}})(?::\d{{1,5}})?(/\S*)?(?![\w.])")
-_BARE_IPV6_RE = re.compile(r"\[([0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7})\]")
+# Candidates are wide (decimal, octal or hex parts; IPv6 with or without
+# brackets, IPv4-mapped tails) and each is confirmed with `ipaddress`.
+_IPV4_PART = r"(?:0x[0-9a-f]+|\d+)"
+_BARE_IPV4_RE = re.compile(rf"(?<![\w.])({_IPV4_PART}(?:\.{_IPV4_PART}){{3}})(?::\d{{1,5}})?(/\S*)?(?![\w.])", re.IGNORECASE)
+_BARE_IPV6_RE = re.compile(r"\[([0-9A-Fa-f:.]+)\]|(?<![\w:.])([0-9A-Fa-f]{0,4}(?::[0-9A-Fa-f]{0,4}){2,7}(?:\.\d{1,3}){0,3})(?![\w:])")
+_PROTOCOL_RELATIVE_RE = re.compile(r"(?<![:\w/])//([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.[a-z]{2,24})(/\S*)?", re.IGNORECASE)
 # Base64 runs long enough to carry a sentence (standard or URL-safe alphabet).
 _BASE64_RE = re.compile(r"(?<![A-Za-z0-9+/_-])[A-Za-z0-9+/_-]{24,}={0,2}")
 
@@ -438,52 +447,114 @@ def _injection_findings(rel: str, lines: list[str]) -> list[Finding]:
     return findings
 
 
-def _link_scheme_problems(line: str) -> list[str]:
-    """Markdown link destinations whose scheme isn't http or https."""
-    problems = []
-    dests = [m.group(1) for m in _MD_INLINE_DEST_RE.finditer(line)]
-    ref = _MD_REF_DEST_RE.match(line)
-    if ref:
-        dests.append(ref.group(1))
-    for dest in dests:
+def _link_scheme_findings(rel: str, text: str, lines: list[str]) -> list[Finding]:
+    """Markdown link destinations (inline or reference, on the whole file, so a
+    destination after a line break counts) whose scheme isn't http or https.
+    Backslash escapes and entities are undone and whitespace and control
+    characters dropped first, as a renderer would."""
+    findings = []
+    matches = [*_MD_INLINE_DEST_RE.finditer(text), *_MD_REF_DEST_RE.finditer(text)]
+    for match in sorted(matches, key=lambda m: m.start(1)):
+        dest = match.group(1)
         raw = dest[1:-1] if dest.startswith("<") and dest.endswith(">") else dest
+        raw = _MD_BACKSLASH_ESCAPE_RE.sub(r"\1", raw)
         clean = "".join(ch for ch in html.unescape(raw) if ch > " " and ch != "\x7f").lower()
         scheme = _SCHEME_RE.match(clean)
         if scheme and scheme.group(1) not in ("http", "https"):
-            problems.append(f"link with scheme '{scheme.group(1)}:' (only http, https or a relative link)")
-    return problems
+            number = text.count("\n", 0, match.start(1)) + 1
+            findings.append(
+                Finding(rel, number, "url", f"link with scheme '{scheme.group(1)}:' (only http, https or a relative link)", lines[number - 1])
+            )
+    return findings
 
 
-def _bare_ip_problems(line: str, allowed: tuple[str, ...]) -> list[str]:
+def _ipv4_from_parts(text: str) -> ipaddress.IPv4Address | None:
+    """Dotted IPv4 the way inet_aton reads it: each part decimal, 0x-hex or
+    0-prefixed octal."""
+    octets = []
+    for part in text.split("."):
+        try:
+            value = int(part, 16) if part.lower().startswith("0x") else int(part, 8) if len(part) > 1 and part.startswith("0") else int(part)
+        except ValueError:
+            return None
+        if value > 255:
+            return None
+        octets.append(value)
+    return ipaddress.IPv4Address(".".join(map(str, octets)))
+
+
+def _bare_host_problems(line: str, allowed: tuple[str, ...]) -> list[str]:
+    """Bare IP addresses and protocol-relative //host forms in practices/."""
     problems = []
     for match in _BARE_IPV4_RE.finditer(line):
-        problem = _url_problem(match.group(0).rstrip(_URL_TRAILING), allowed)
-        if problem:
-            problems.append(f"bare IP address: {problem}")
+        address = _ipv4_from_parts(match.group(1))
+        if address:
+            rest = match.group(0)[len(match.group(1)):].rstrip(_URL_TRAILING)
+            problem = _url_problem(f"{address}{rest}", allowed)
+            if problem:
+                problems.append(f"bare IP address '{match.group(1)}': {problem}")
     for match in _BARE_IPV6_RE.finditer(line):
-        if match.group(1).count(":") >= 2 and not any(f"[{match.group(1)}]" == entry for entry in allowed):
-            problems.append(f"bare IP address: '[{match.group(1)}]' is not in url_allow ({CONFIG_NAME})")
+        candidate = match.group(1) or match.group(2)
+        try:
+            address = ipaddress.IPv6Address(candidate)
+        except ValueError:
+            continue
+        if f"[{address.compressed}]" not in allowed and address.compressed not in allowed:
+            problems.append(f"bare IP address '{candidate}' ({address.compressed}) is not in url_allow ({CONFIG_NAME})")
+    for match in _PROTOCOL_RELATIVE_RE.finditer(line):
+        problem = _url_problem("https:" + match.group(0).rstrip(_URL_TRAILING), allowed)
+        if problem:
+            problems.append(f"protocol-relative URL: {problem}")
     return problems
 
 
-def _base64_injection_findings(rel: str, number: int, line: str) -> list[Finding]:
-    """Base64 runs that decode to readable text matching the injection patterns."""
-    findings = []
-    for match in _BASE64_RE.finditer(line):
-        token = match.group(0).rstrip("=").replace("-", "+").replace("_", "/")
-        token += "=" * (-len(token) % 4)
-        try:
-            decoded = base64.b64decode(token, validate=True).decode("utf-8")
-        except (binascii.Error, ValueError):
+def _base64_injection(text: str) -> str | None:
+    """Why a base64 run in `text` decodes to agent-directed text, or None.
+    Lenient on purpose: every alignment offset, odd lengths trimmed, bad
+    bytes dropped rather than skipping the run."""
+    for match in _BASE64_RE.finditer(text):
+        run = match.group(0).rstrip("=").replace("-", "+").replace("_", "/")
+        for offset in range(4):
+            token = run[offset:]
+            if len(token) % 4 == 1:
+                token = token[:-1]
+            try:
+                raw = base64.b64decode(token + "=" * (-len(token) % 4), validate=True)
+            except (binascii.Error, ValueError):
+                continue
+            decoded = "".join(ch for ch in raw.decode("utf-8", errors="ignore") if ch.isprintable() or ch == " ")
+            skeleton = _skeleton(decoded)
+            for pattern, why in _INJECTION_PATTERNS:
+                if pattern.search(skeleton):
+                    return why
+    return None
+
+
+def _base64_injection_findings(rel: str, lines: list[str]) -> list[Finding]:
+    """Per line, then per paragraph with line breaks and indentation removed,
+    so a payload split across lines is still decoded."""
+    findings: list[Finding] = []
+    flagged: set[int] = set()
+    for number, line in enumerate(lines, start=1):
+        why = _base64_injection(line)
+        if why:
+            findings.append(Finding(rel, number, "injection", f"base64-encoded agent-directed text: {why}", line))
+            flagged.add(number)
+    start = 0
+    while start < len(lines):
+        if not lines[start].strip():
+            start += 1
             continue
-        printable = sum(ch.isprintable() or ch in "\n\t" for ch in decoded)
-        if not decoded or printable / len(decoded) < 0.9:
-            continue
-        skeleton = _skeleton(decoded)
-        for pattern, why in _INJECTION_PATTERNS:
-            if pattern.search(skeleton):
-                findings.append(Finding(rel, number, "injection", f"base64-encoded agent-directed text: {why}", line))
-                break
+        end = start
+        while end + 1 < len(lines) and lines[end + 1].strip():
+            end += 1
+        if end > start and not flagged & set(range(start + 1, end + 2)):
+            why = _base64_injection("".join(line.strip() for line in lines[start : end + 1]))
+            if why:
+                findings.append(
+                    Finding(rel, start + 1, "injection", f"base64-encoded agent-directed text split across lines {start + 1}-{end + 1}: {why}", lines[start])
+                )
+        start = end + 1
     return findings
 
 
@@ -534,13 +605,8 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
             or (not in_fence and not fence and _HTML_TAG_RE.search(_INLINE_CODE_RE.sub("", no_links)))
         ):
             findings.append(Finding(rel, number, "html", "raw HTML tag outside code (can hide text or carry handlers)", line))
-        for problem in _link_scheme_problems(line):
-            findings.append(Finding(rel, number, "url", problem, line))
-        # In every KB tree, skills and commands included: they may instruct
-        # agents in plain words, but never in an encoded payload.
-        findings.extend(_base64_injection_findings(rel, number, line))
         if top == "practices":
-            for problem in _bare_ip_problems(line, config.url_allow):
+            for problem in _bare_host_problems(line, config.url_allow):
                 findings.append(Finding(rel, number, "url", problem, line))
             for match in _URL_RE.finditer(line):
                 problem = _url_problem(match.group(1).rstrip(_URL_TRAILING), config.url_allow)
@@ -552,6 +618,10 @@ def lint_file(root: Path, path: Path, config: LintConfig) -> list[Finding]:
                 scheme = link.group(0)[1:].split(":", 1)[0].lower()
                 if scheme not in ("http", "https"):
                     findings.append(Finding(rel, number, "url", f"autolink with scheme '{scheme}:' (only http and https)", line))
+    # In every KB tree, skills and commands included: they may instruct agents
+    # in plain words, but never through a javascript: link or an encoded payload.
+    findings.extend(_link_scheme_findings(rel, text, lines))
+    findings.extend(_base64_injection_findings(rel, lines))
     if top in INSTRUCTION_DIRS:
         findings.extend(_injection_findings(rel, lines))
     if top == "practices":
