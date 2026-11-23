@@ -112,11 +112,15 @@ def test_settings_hooks_point_at_executable_scripts() -> None:
         bash("cat *.md *.txt"),
         bash("for d in catalog/skills/*/; do echo $d; done"),  # "*/" matches directories only
         bash("echo $((1 << 2))"),
+        bash("FOO=1 make test"),
+        bash("(cd src && ls)"),
+        bash("for f in *.py; do echo $f; done"),
+        bash("if [ -f x ]; then rm -r build; fi"),
     ],
     ids=["readme", "abs-src", "env-example-name", "pytest", "normal-push", "rm-file", "rm-r", "heredoc-body",
          "commit-message", "commit-message-eq", "gh-body", "echo-text", "ls-star", "cat-md-glob", "bash-lc-ok",
          "escaped-substitution", "quoted-heredoc-literal", "find-names", "cat-md-txt",
-         "dir-glob-loop", "arith-shift"],
+         "dir-glob-loop", "arith-shift", "env-assign-ok", "subshell-ok", "for-loop-ok", "if-rm-r-ok"],
 )
 def test_guard_allows(event: dict) -> None:
     assert decision(event) == "allow"
@@ -173,6 +177,27 @@ def test_guard_allows(event: dict) -> None:
         bash("cat <<E\"O\"F\nEOF\nrm -rf build\nE"),  # the delimiter is the whole word EOF
         bash("find . -name '*.pem' | xargs cat"),  # a lister piped on reads the files
         bash("ls > x.pem"),  # a redirect target is never exempt
+        # Checker batch 3: assignments, subshells, groups and compound commands
+        bash("FOO=1 rm -rf build"),
+        bash("GIT_DIR=.git git push -f"),
+        bash("A=1 B=2 env C=3 rm -rf build"),
+        bash("(rm -rf build)"),
+        bash("{ rm -rf build; }"),
+        bash("if true; then rm -rf build; fi"),
+        bash("if (rm -rf build); then :; fi"),
+        bash("for d in a b; do rm -rf $d; done"),
+        bash("while true; do git push --force; done"),
+        bash("until false; do { git push -f; }; done"),
+        bash("! rm -rf build"),
+        bash("case x in x) rm -rf build;; esac"),
+        bash("f() { rm -rf build; }; f"),
+        bash("(cd src && rm -rf build)"),
+        bash("(cat .env)"),
+        bash("{ cat x.pem; }"),
+        bash("sudo -u x FOO=1 rm -rf build"),  # a wrapper option's value isn't the program
+        bash("nice -n 5 rm -rf build"),
+        bash("timeout -s KILL 5 git push -f"),
+        bash("find . | xargs -I{} rm -rf {}"),
         # sixth review round
         bash("echo a\\ # ; rm -rf build"),  # "#" after an escaped space isn't a comment
         bash("cat <<\"E\\OF\"\nEOF\nrm -rf build\nE\\OF"),  # backslash in a quoted delimiter: deny
@@ -303,3 +328,20 @@ def test_lessons_have_dates_and_links() -> None:
         assert re.match(r"\d{4}-\d{2}-\d{2}: \S", heading), heading
         assert re.search(r"^- Source: https://github\.com/JongoDB/jdad/(pull|issues)/\d+", entry, re.MULTILINE), heading
         assert "- Rule:" in entry, heading
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "X=rm; $X -rf build",
+        "cmd='rm -rf build'; eval \"$cmd\"",
+        "python3 -c 'import shutil; shutil.rmtree(\"build\")'",
+        "echo cm0gLXJmIGJ1aWxk | base64 -d | sh",
+        "alias r='rm -rf'; r build",
+        "find . -delete",
+    ],
+)
+def test_known_gaps_are_documented_not_caught(command: str) -> None:
+    """The guard docstring lists these as out of reach. If one starts being
+    caught, move it to the deny list and update the docstring."""
+    assert decision(bash(command)) == "allow"
