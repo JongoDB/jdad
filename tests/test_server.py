@@ -69,6 +69,18 @@ async def test_list_topics_returns_performance(client: Client) -> None:
 
 
 @pytest.mark.anyio
+async def test_search_practices_forwards_tags_and_limit(client: Client) -> None:
+    """Checker 12B (JON-1360): the tool must pass tags and limit through."""
+    query = {"query": "cache queries tests review plan", "response_format": "detailed"}
+    unfiltered = tool_payload(await client.call_tool("search_practices", {**query, "limit": 20}))
+    assert any("db" not in hit["tags"] for hit in unfiltered)
+    filtered = tool_payload(await client.call_tool("search_practices", {**query, "limit": 20, "tags": ["db"]}))
+    assert filtered and all("db" in hit["tags"] for hit in filtered)
+    limited = tool_payload(await client.call_tool("search_practices", {**query, "limit": 2}))
+    assert len(limited) == 2 and len(unfiltered) > 2
+
+
+@pytest.mark.anyio
 async def test_search_practices_returns_ranked_rules(client: Client) -> None:
     hits = tool_payload(
         await client.call_tool("search_practices", {"query": "OpenTelemetry traces", "tags": ["observability"]})
