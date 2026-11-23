@@ -54,7 +54,8 @@ def list_topics() -> list[dict[str, Any]]:
 
 @mcp.tool(annotations=READ_ONLY)
 def search_practices(query: str, tag: str | None = None) -> list[dict[str, Any]]:
-    """Keyword search over practice sections, returning matched file, heading, and body.
+    """Keyword search over practice sections: matched file, heading, body, and the section's rules
+    (each with id, text, tags, citation, origin, applies_when).
 
     Optional tag filter: frontend, backend, db, infra, observability, or testing.
     """
@@ -92,7 +93,7 @@ def get_source(id: str) -> str:
 
 @mcp.tool(annotations=READ_ONLY)
 def get_checklist(tags: list[str]) -> str:
-    """Return bullet rules filtered by tags, ready to paste into a plan.
+    """Return rules filtered by tags, one line each (`- <id>: <text> (<citation>)`), ready to paste into a plan.
 
     Tags: frontend, backend, db, infra, observability, testing. An empty list returns every rule.
     """
@@ -438,6 +439,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Serve Streamable HTTP instead of stdio.",
     )
     parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Load every KB file through the tools' read paths, report problems, and exit (0 = servable).",
+    )
+    parser.add_argument(
         "--host",
         default="127.0.0.1",
         help="HTTP bind host (default: 127.0.0.1).",
@@ -489,6 +495,10 @@ def resolve_ssl_files(
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    if args.check:
+        from jdad.check import run_check
+
+        raise SystemExit(run_check())
     if args.http:
         import uvicorn
 
