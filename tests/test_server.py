@@ -614,3 +614,93 @@ def test_http_initialize_reports_package_version(http_server: _HttpServer) -> No
     info = payload["result"]["serverInfo"]
     assert info["name"] == "jdad"
     assert info["version"] == __version__
+
+
+def _raw_request(port: int, method: str, path: str, host: str, headers: dict | None = None,
+                 body: bytes | None = None) -> tuple[int, bytes]:
+    """Send one request with an exact Host header (httpx would rewrite it from the URL)."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+    try:
+        conn.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
+        conn.putheader("Host", host)
+        for key, value in (headers or {}).items():
+            conn.putheader(key, value)
+        if body is not None:
+            conn.putheader("Content-Length", str(len(body)))
+        conn.endheaders(body)
+        response = conn.getresponse()
+        return response.status, response.read()
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("host", "status"),
+    [
+        ("jdad-mcp.jondevs.com", 200),
+        ("JDAD-MCP.jondevs.com", 421),  # SDK matching is exact; clients send lowercase
+        ("127.0.0.1:8443", 200),  # in-container healthcheck
+        ("127.0.0.1", 200),  # update-docker.sh: curl https://127.0.0.1:443 drops the port
+        ("[::1]", 200),
+        ("localhost:8765", 200),
+        ("evil.example.com", 421),
+        ("203.0.113.7", 421),  # a scanner hitting the origin IP directly
+        ("jdad-mcp.jondevs.com.evil.example", 421),
+    ],
+)
+def test_healthz_respects_host_allowlist(
+    monkeypatch: pytest.MonkeyPatch, kb_root: Path, host: str, status: int
+) -> None:
+    monkeypatch.setenv("JDAD_ALLOWED_HOSTS", "jdad-mcp.jondevs.com")
+    server = _HttpServer(_free_port())
+    server.start()
+    try:
+        code, body = _raw_request(server.port, "GET", "/healthz", host)
+        assert code == status
+        if status == 200:
+            assert json.loads(body) == {"status": "ok"}
+        else:
+            assert body == b"Invalid Host header"
+    finally:
+        server.stop()
+
+
+def test_healthz_without_allowlist_accepts_only_loopback(kb_root: Path) -> None:
+    server = _HttpServer(_free_port())
+    server.start()
+    try:
+        assert _raw_request(server.port, "GET", "/healthz", f"127.0.0.1:{server.port}")[0] == 200
+        assert _raw_request(server.port, "GET", "/healthz", "jdad-mcp.jondevs.com")[0] == 421
+    finally:
+        server.stop()
+
+
+def test_wrong_host_gets_421_before_auth(monkeypatch: pytest.MonkeyPatch, kb_root: Path) -> None:
+    """A foreign Host is refused before the token is checked, on /mcp and unknown paths."""
+    token = "test-jdad-token-not-a-secret"
+    monkeypatch.setenv("JDAD_TOKEN", token)
+    monkeypatch.setenv("JDAD_ALLOWED_HOSTS", "jdad-mcp.jondevs.com")
+    headers, payload = _mcp_initialize(token)
+    body = json.dumps(payload).encode()
+    no_auth = {k: v for k, v in headers.items() if k != "Authorization"}
+    server = _HttpServer(_free_port())
+    server.start()
+    try:
+        assert _raw_request(server.port, "POST", "/mcp", "evil.example.com", no_auth, body)[0] == 421
+        assert _raw_request(server.port, "POST", "/mcp", "evil.example.com", headers, body)[0] == 421
+        assert _raw_request(server.port, "GET", "/nope", "evil.example.com")[0] == 421
+        # Allowlisted Host: auth still applies.
+        assert _raw_request(server.port, "POST", "/mcp", "jdad-mcp.jondevs.com", no_auth, body)[0] == 401
+        assert _raw_request(server.port, "POST", "/mcp", "jdad-mcp.jondevs.com", headers, body)[0] == 200
+    finally:
+        server.stop()
+
+
+def test_missing_host_is_rejected(kb_root: Path) -> None:
+    from jdad.server import host_is_allowed
+
+    assert not host_is_allowed(None, ["127.0.0.1:*"])
+    assert not host_is_allowed("", ["127.0.0.1:*"])
+    assert host_is_allowed("127.0.0.1:1", ["127.0.0.1:*"])
+    assert not host_is_allowed("127.0.0.1", ["127.0.0.1:*"])
+    assert not host_is_allowed("127.0.0.1.evil.example:1", ["127.0.0.1:*"])
