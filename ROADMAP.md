@@ -66,7 +66,7 @@ Deferred (Jon, 2026-11-22 3:16 PM ET): **P3.2** semantic search and the droplet 
 - [ ] **P0.10 KB poisoning defences, including at runtime** (red-team H4 and M3, JON-1341, PR #8)
   - Goal: text in `practices/` or `sources/` can't steer agents, and the server never serves a file from outside the KB.
   - Deliverables: `jdad lint-kb` in `./verify` (agent-addressed text, URLs and shell in practices, hidden Unicode, comments, symlinks, non-`.md` files, file size); `get_source` output marked as quoted third-party material; the KB root never taken from the current directory; **the runtime symlink fix (Checker on #8, 0a5b7d0)**: files opened with `O_NOFOLLOW`, and symlinked files and directories, non-regular files, anything resolving outside the KB root, and files over 1 MiB skipped by every tool and resource; `docs/threat-model.md`; draft CODEOWNERS.
-  - Acceptance: `tests/test_lint.py` and `tests/test_kb_files.py` pass in `./verify`, including the `practices/hosts.md -> /etc/hosts` repro (refused by `get_practice`, absent from `list_topics`); `jdad lint-kb` is clean on the repo; the 5 lint bypasses from Checker's verdict on #8 each get a failing fixture (follow-up); a decision recorded on whether the hosted server requires `KB_ROOT` (follow-up).
+  - Acceptance: `tests/test_lint.py` and `tests/test_kb_files.py` pass in `./verify`, including the `practices/hosts.md -> /etc/hosts` repro (refused by `get_practice`, absent from `list_topics`); `jdad lint-kb` is clean on the repo; the 5 lint bypasses from Checker's verdict on #8 each get a failing fixture (done in #8: `tests/test_lint.py`); a decision recorded on whether the hosted server requires `KB_ROOT` (follow-up).
   - Depends on: nothing. P1.2 builds on it.
 
 ## Phase 1: One source of truth
