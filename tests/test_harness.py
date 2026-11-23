@@ -554,6 +554,8 @@ def test_batch10_bypasses_are_denied(command: str) -> None:
         # echo drops -n/-e/-E before its text is checked as code (Checker 12B mutant N13)
         bash("echo -n 'ls' | sh"),
         bash("echo -n 'git status' | bash"),
+        bash("echo -E 'ls' | sh"),  # every flag, not only -n (Checker mutant X1)
+        bash("echo -n -E 'ls' | sh"),  # every leading flag word, not only the first (X2)
         bash("echo $(echo hello)"),
         bash("git log --oneline | head -5"),
         bash("rm --recursive build"),
