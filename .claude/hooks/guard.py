@@ -15,13 +15,14 @@ through leading VAR=value assignments (their values are checked too),
 ( ) subshells, { } groups, if/for/while/case bodies, wrapper options
 that take a value (sudo -u USER), backslash-newline continuations, GNU
 long-option prefixes (rm --rec --forc), variables the command itself
-assigns or defaults ("F=-rf; rm $F", "rm ${F:--rf}"), and code a shell
-reads from stdin: a here-string, a heredoc, or echo/printf piped in
-(redirections count anywhere in the command, with fd prefixes, and
-- or /dev/stdin as the script). A shell fed from any other pipe, a file
-or a descriptor is denied (its code can't be seen), and so is printf or
-echo text with escapes or a format that's run as code (the guard
-doesn't decode it). Every value a variable is given counts, and
+assigns or defaults ("F=-rf; rm $F", "rm ${F:--rf}"), and every input
+a shell gets, treated as code it may run: here-strings and heredocs on
+any descriptor, and echo/printf text piped in. Which descriptor a shell
+reads its script from isn't modelled (it depends on -s, option clusters,
+--rcfile and paths), so any input the guard can't see is denied: a file
+or duplicated descriptor, another program's output piped in, a script
+or rc file under dev/ or proc/. So is printf or echo text with escapes
+or a format that's run as code (the guard doesn't decode it). Every value a variable is given counts, and
 ${NAME+word} on a variable the command doesn't set may be word. Secret
 names are matched case-insensitively (.ENV is .env on macOS).
 
@@ -121,8 +122,6 @@ REDIRECT_WORD_RE = re.compile(r"(\d*)(<<<|<<-|<<|<>|<&|>&|&>>|&>|>>|>\||<|>)(.*)
 # Operands that make a shell read its script from stdin.
 STDIN_OPERANDS = {"-", "/dev/stdin", "/dev/fd/0", "/proc/self/fd/0"}
 MAX_VARIANTS = 8  # possible values of a word or a command checked; more is denied, never truncated
-# A descriptor path, after normalising (//dev/./stdin, /proc/<any>/fd/N).
-FD_PATH_RE = re.compile(r"/(?:dev|proc/[^/]+)/fd/(\d+)")
 # Shell options whose value is a separate word (not the script).
 SHELL_VALUE_OPTIONS = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}
 WORD_START = " \t\n;|&("
@@ -658,10 +657,16 @@ def _stdin_code(words: list[str], producer: list[str] | None, bodies: list[str],
 
 def _stdin_code_argv(words: list[str], producer: list[str] | None, bodies: list[str],
                      variables: dict[str, list[str]]) -> tuple[list[str], str | None]:
-    """Redirections count wherever they are ("<<<'x' bash", "bash 0<<<'x'",
-    "bash /dev/fd/3 3<<<'x'")."""
+    """Every input a shell gets is treated as code it may run, wherever the
+    redirection is and whichever descriptor it's on: which descriptor a
+    shell reads its script from depends on options (-s, clusters, --rcfile)
+    and paths the guard can't model reliably, so it doesn't try. Here-strings,
+    heredocs and piped echo/printf text are checked as code; any input the
+    guard can't see (a file, a duplicated descriptor, another program's
+    output) is denied, and so is a script path under dev/ or proc/."""
     rest: list[str] = []
-    sources: dict[str, list[tuple[str, str]]] = {}  # fd -> [("here", text) | ("doc", "") | ("file", "")]
+    codes: list[str] = []
+    unseen = False
     k = 0
     while k < len(words):
         match = REDIRECT_WORD_RE.fullmatch(words[k])
@@ -675,84 +680,50 @@ def _stdin_code_argv(words: list[str], producer: list[str] | None, bodies: list[
             k += 1
         k += 1
         if op.startswith((">", "&")):
-            if fd:  # 0>&3, 3>file: that descriptor now holds something the guard can't see
-                sources.setdefault(fd, []).append(("file", ""))
+            if fd == "0":  # 0>&3, 0>file: stdin replaced by something unseen
+                unseen = True
             continue  # otherwise an output redirection
-        fd = fd or "0"
         if op == "<<<":
-            sources.setdefault(fd, []).append(("here", target))
+            codes.append(target)
         elif op in ("<<", "<<-"):
-            sources.setdefault(fd, []).append(("doc", ""))
+            codes.extend(bodies)
         else:
-            sources.setdefault(fd, []).append(("file", ""))  # <, <> or <&: can't be seen
+            unseen = True  # <, <> or <&: a file or descriptor the guard can't see
     rest = _strip_wrappers(rest)
     if not rest or PurePath(rest[0]).name not in SHELLS:
         return [], None
-    # A stdin or descriptor marker anywhere counts, whatever comes before it.
-    # That is stricter than bash ("bash s.sh /dev/stdin" passes it to s.sh as
-    # $1), on purpose: other shells' value-taking options aren't all modelled.
-    script_fd: str | None = None
-    operand = False
     args, k = rest[1:], 0
     while k < len(args):
         arg = args[k]
-        if re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", arg):
-            return [], None  # sh -c CODE: checked by _nested_commands
         if arg in SHELL_VALUE_OPTIONS:
             value = args[k + 1] if k + 1 < len(args) else ""
-            if arg in ("--rcfile", "--init-file"):  # the shell runs this file as code too
-                descriptor = _descriptor_operand(value)
-                if descriptor == "?":
-                    return [], "a shell reads code from a device path the guard can't see"
-                if descriptor is not None:
-                    script_fd = script_fd or descriptor
+            if arg in ("--rcfile", "--init-file") and _device_path(value):
+                return [], "a shell reads code from a device path the guard can't see"
             k += 2
             continue
-        descriptor = _descriptor_operand(arg)
-        if descriptor == "?":
+        if not arg.startswith(("-", "+")) and _device_path(arg):
             return [], "a shell reads a script from a device path the guard can't see"
-        if descriptor is not None or arg == "-s":
-            script_fd = script_fd or descriptor or "0"
-        elif not arg.startswith(("-", "+")):
-            operand = True  # a script file: a known gap (its text isn't visible)
         k += 1
-    if operand and script_fd is None:
-        return [], None
-    fd = script_fd or "0"
-    codes: list[str] = []
-    for kind, text in sources.get(fd, []):
-        if kind == "here":
-            codes.append(text)
-        elif kind == "doc":
-            codes.extend(bodies)
-        else:
-            return codes, "a shell reads code from a file or descriptor the guard can't see"
-    if fd == "0" and producer is not None:
+    if producer is not None:
         printed = _printed_texts(producer, variables)
         if printed is None:
-            return codes, "a shell reads code from a pipe the guard can't see"
+            return codes, "a shell reads input from a pipe the guard can't see"
         codes.extend(printed)
-    if fd != "0" and fd not in sources:
-        return codes, f"a shell reads code from descriptor {fd}, which the guard can't see"
+    if unseen:
+        return codes, "a shell reads input from a file or descriptor the guard can't see"
     return codes, None
 
 
-def _descriptor_operand(arg: str) -> str | None:
-    """The descriptor a script operand reads ("0" for -, /dev/stdin), "?" for
-    any other /dev or /proc path, None for an ordinary file."""
+def _device_path(arg: str) -> bool:
+    """A path with a dev or proc component (absolute or relative, any
+    spelling or case), other than stdin itself ("-", /dev/stdin,
+    /dev/fd/0), which is checked as input anyway."""
     if arg in STDIN_OPERANDS:
-        return "0"
-    if not arg.startswith("/"):
-        return None
+        return False
     path = posixpath.normpath(re.sub(r"/+", "/", arg)).lower()
-    if path == "/dev/stdin":
-        return "0"
-    match = FD_PATH_RE.fullmatch(path)
-    if match:
-        return match.group(1)
-    if path.startswith(("/dev/", "/proc/")):
-        return "?"
-    return None
+    if path in ("/dev/stdin", "/dev/fd/0"):
+        return False
+    return any(part in ("dev", "proc") for part in path.split("/"))
 
 
 def _token_reason(raw_word: str, lister: bool, redirect: bool) -> str | None:
