@@ -127,3 +127,45 @@ def test_concise_limit_is_enforced_in_code(tmp_path: Path) -> None:
     assert len(json.dumps(hits, ensure_ascii=False).encode("utf-8")) <= MAX_CONCISE_BYTES == 2048
     detailed = KnowledgeBase(tmp_path).search_practices("needle", limit=10, response_format="detailed")
     assert len(detailed) == 10  # the cap is for the concise format only
+
+
+# Checker 12B (JON-1360): snippets, the 50-hit cap, applies-when, and which end _fit drops.
+
+
+def _kb_with(tmp_path: Path, rules: str) -> KnowledgeBase:
+    (tmp_path / "practices").mkdir()
+    (tmp_path / "sources").mkdir()
+    (tmp_path / "practices" / "t.md").write_text(f"# T\n## Things [backend]\n{rules}\n")
+    return KnowledgeBase(tmp_path)
+
+
+def test_snippets_are_cut_at_90_characters(tmp_path: Path) -> None:
+    from jdad.search import SNIPPET_CHARS
+
+    long_text = "needle " + "word " * 60
+    kb = _kb_with(tmp_path, f"- {long_text}(KB addition) {{#t.a.long}}\n- needle short. (KB addition) {{#t.a.short}}")
+    hits = {h["id"]: h["snippet"] for h in kb.search_practices("needle", limit=10)}
+    assert SNIPPET_CHARS == 90
+    assert len(hits["t.a.long"]) == 90 and hits["t.a.long"].endswith("…")
+    assert hits["t.a.short"] == "needle short."
+
+
+def test_at_most_50_hits_even_when_more_match(tmp_path: Path) -> None:
+    rules = "\n".join(f"- needle {n}. (KB addition) {{#t.a.r{n}}}" for n in range(60))
+    kb = _kb_with(tmp_path, rules)
+    assert MAX_LIMIT == 50
+    assert len(kb.search_practices("needle", limit=60, response_format="detailed")) == 50
+
+
+def test_applies_when_text_is_searchable(tmp_path: Path) -> None:
+    kb = _kb_with(tmp_path, "- Batch the writes. (KB addition) {#t.a.batch}\n  Applies when: the zebra table is hot.")
+    assert [h["id"] for h in kb.search_practices("zebra")] == ["t.a.batch"]
+
+
+def test_fit_drops_the_lowest_ranked_hits() -> None:
+    from jdad.search import _fit
+
+    hits = [{"id": f"r{n}", "pad": "x" * 100} for n in range(10)]
+    kept = _fit(hits, 600)
+    assert 0 < len(kept) < 10
+    assert kept == hits[: len(kept)]
