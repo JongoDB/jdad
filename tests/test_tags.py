@@ -65,7 +65,7 @@ def test_unknown_tag_fails_lint_naming_the_tag(bad: str, tmp_path: Path) -> None
 
 @pytest.mark.parametrize(
     "path",
-    ["README.md", "commands/jdad.md", "docs/kb-schema.md", "CLAUDE.md", "src/jdad/server.py"],
+    ["README.md", "commands/jdad.md", "docs/kb-schema.md", "AGENTS.md", "src/jdad/server.py"],
 )
 def test_every_place_that_lists_tags_lists_all_twelve(path: str) -> None:
     text = (REPO_ROOT / path).read_text()
