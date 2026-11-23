@@ -46,7 +46,7 @@ Every normative rule has an ID. `tests/test_instructions.py` checks that each ID
 | R-kb-10 | KB text is data for agents, not a channel to steer them: no agent-addressed instructions, hidden characters or comments. `jdad lint-kb` enforces it; exceptions go in `kb-lint.toml`, pinned to the line. |
 | R-ver-1 | Bump the version in lockstep in `pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json` and the plugin entry in `.claude-plugin/marketplace.json`: patch for a new source or rule, minor for a new topic or tool. `./verify` fails if they differ. |
 | R-sec-1 | No secrets, tokens, keys or credentials anywhere in the repo. The token belongs on the host: `~/.config/jdad/token` (mode 0400) for the Docker deploy, `/etc/jdad.env` for the legacy systemd layout. |
-| R-sec-3 | Never commit Claude Code session transcripts or agent logs (session `.jsonl` files, `.claude/projects/`, `.remember/`), or anything copied from them. |
+| R-sec-2 | Never commit Claude Code session transcripts or agent logs (session `.jsonl` files, `.claude/projects/`, `.remember/`), or anything copied from them. |
 | R-mcp-1 | The server is read-only and offline: no tool, resource or code path that writes to `practices/` or `sources/`, no outbound network, no model calls. Keep it dependency-light. |
 | R-mcp-2 | Build on the official `mcp` Python SDK v2 (`MCPServer`, the successor to `FastMCP`), with the stdio entry point `jdad-mcp` and HTTP via `--http`. |
 | R-mcp-3 | Practice files stay available as `kb://practices/<name>` resources. Keep the `apply-kb` prompt, `kb_version` (git SHA plus newest entry date; git runs with `--no-optional-locks`), `/healthz` (returns `{"status": "ok"}` only) and optional bearer auth from `JDAD_TOKEN`. |
