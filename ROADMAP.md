@@ -118,10 +118,11 @@ Goal: video or article → source → practice, with dedupe, tags and citations,
   - Deliverables: `docs/ingestion.md` runbook (Jon's link → Daisy watches or reads it → extract tools, resources and practices → `sources/` record with the link and items → fold into `practices/` → dedupe → version bump → PR); `catalog/skills/jdad-ingest/` for Daisy and other agents; `/jdad add` keeps routing to Daisy.
   - Acceptance: a dry run on one new article produces a source file and practice edits that pass `jdad lint-kb`; no transcript is stored anywhere.
   - Depends on: P1.3, P1.5. Jon decided (2026-11-22): no transcript pipeline or transcripts repo; source records (link plus extracted items, with paraphrase, short quotes and timestamps) are public; Claude session transcripts and agent logs never go in the repo.
-- [ ] **P2.2 Duplicate and near-duplicate detection**
+- [x] **P2.2 Duplicate and near-duplicate detection**
   - Deliverables: `jdad kb dupes` (offline token-overlap or TF-IDF similarity over rule text, stdlib only) listing candidate pairs above a threshold; a non-blocking report in `./verify` output.
   - Acceptance: a committed fixture file labels pairs as duplicate, paraphrase or distinct, and the PR records the cutoff θ; at θ, every exact-duplicate pair is reported, paraphrase recall ≥ 0.8, and no pair in the current KB labeled distinct is reported; the score output is in the PR.
   - Depends on: P1.2.
+  - Evidence (2026-11-23, JON-1362): `jdad kb dupes` (TF-IDF cosine over the search tokenizer, stdlib only; texts equal once case, spacing and punctuation are ignored score 1.0), printed by `./verify` with `|| true`. θ = 0.6, from `tests/fixtures/dupes/pairs.json` (written before scoring): 6/6 duplicates at 1.0, paraphrase recall 13/15 = 0.87, highest distinct pair 0.579; the 8 highest-scoring KB pairs, labeled distinct by hand, top out at 0.431. `tests/test_dupes.py` (9) asserts each; 9 mutants killed.
 - [x] **P2.3 Tag taxonomy v2**
   - Deliverables: add tags for `security`, `supply-chain`, `ci`, `process` (agent workflow), `design` (API and architecture), `ux`; document each in `docs/kb-schema.md`; `get_checklist` and the `/jdad` command accept them.
   - Acceptance: lint and `get_checklist` tests are parametrized over all six new tags; each tag returns its seeded rule ID and excludes rules with other tags; an unknown tag fails lint with the tag name in the error.

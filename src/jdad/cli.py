@@ -3,6 +3,7 @@
 - `jdad lint-kb`: content checks on practices/, sources/, skills/ and commands/.
 - `jdad build [--check]`: compile catalog/ into skills/, generated/agents-skills/
   and generated/cursor-rules/.
+- `jdad kb dupes [--threshold]`: rule pairs that look like duplicates (a report).
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ import sys
 from pathlib import Path
 
 from jdad import build as build_mod
+from jdad import dupes as dupes_mod
 from jdad.kb import resolve_kb_root
 from jdad.lint import lint_kb
 
@@ -52,6 +54,13 @@ def _build(args: argparse.Namespace) -> int:
         return 1
 
 
+def _kb_dupes(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve() if args.root else resolve_kb_root()
+    for line in dupes_mod.report(root, args.threshold):
+        print(line)
+    return 0  # a report for a human, never a gate
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="jdad", description="JDAD repo tooling.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -62,6 +71,12 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--check", action="store_true", help="write nothing; fail if any output is out of date")
     build.add_argument("--root", default=".", help="repo root (default: the current directory)")
     build.set_defaults(func=_build)
+    kb = sub.add_parser("kb", help="Reports about the knowledge base.")
+    kb_sub = kb.add_subparsers(dest="kb_command", required=True)
+    dupes = kb_sub.add_parser("dupes", help="List rule pairs that look like duplicates (always exits 0).")
+    dupes.add_argument("--threshold", type=float, default=dupes_mod.THRESHOLD, help=f"cosine cutoff (default {dupes_mod.THRESHOLD})")
+    dupes.add_argument("--root", help="KB root (default: KB_ROOT, then this checkout).")
+    dupes.set_defaults(func=_kb_dupes)
     args = parser.parse_args(argv)
     return args.func(args)
 

@@ -55,6 +55,9 @@ bash tests/test_docker.sh
 echo "==> kb content lint"
 uv run --frozen jdad lint-kb
 
+echo "==> kb duplicates (report only, never fails)"
+uv run --frozen jdad kb dupes || true
+
 echo "==> ruff"
 uv run --frozen ruff check src tests .claude/hooks
 
