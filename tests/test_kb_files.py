@@ -157,3 +157,36 @@ def test_one_bad_file_does_not_break_listings(tmp_path: Path, caplog: pytest.Log
     assert "skipping source 2026-01-02-bad.md" in caplog.text
     with pytest.raises(UnicodeDecodeError):
         kb.get_practice("bad")  # asking for it directly still fails loudly
+
+
+# ---- JON-1352: the resolve checks are the second line of defense ----
+# In normal operation the symlink checks catch everything first, so these
+# simulate a directory or file swapped for a symlink between the two checks.
+
+
+def test_directory_swapped_to_a_symlink_after_the_check_is_refused(
+    tmp_path: Path, secret: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from jdad import kb as kb_mod
+
+    root = tmp_path / "kb"
+    root.mkdir()
+    (root / "practices").symlink_to(secret.parent, target_is_directory=True)
+    real_is_symlink = Path.is_symlink
+    monkeypatch.setattr(Path, "is_symlink", lambda p: False if p.name == "practices" else real_is_symlink(p))
+    assert kb_mod.kb_markdown_files(root, root / "practices") == []
+
+
+def test_file_swapped_to_a_symlink_after_the_check_is_refused(
+    tmp_path: Path, secret: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import os
+
+    from jdad import kb as kb_mod
+
+    root = tmp_path / "kb"
+    (root / "practices").mkdir(parents=True)
+    (root / "practices" / "leak.md").symlink_to(secret)
+    real_lstat = Path.lstat
+    monkeypatch.setattr(Path, "lstat", lambda p: os.stat(p) if p.name == "leak.md" else real_lstat(p))
+    assert kb_mod.kb_markdown_files(root, root / "practices") == []

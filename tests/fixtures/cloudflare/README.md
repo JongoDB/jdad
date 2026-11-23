@@ -1,0 +1,1 @@
+Test fixtures for `deploy/firewall-cloudflare.sh`: a copy of Cloudflare's published ranges (https://www.cloudflare.com/ips/) taken for the tests. Production fetches the live lists; never apply these files on a host.

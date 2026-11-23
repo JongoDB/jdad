@@ -77,6 +77,24 @@ parse_jdad_token() {
   printf '%s' "$raw"
 }
 
+# Octal permission bits (e.g. 600) and owner uid of a file. GNU stat first
+# (the droplet), BSD stat as the fallback (macOS, where ./verify also runs).
+file_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1"
+}
+
+file_owner_uid() {
+  stat -c '%u' "$1" 2>/dev/null || stat -f '%u' "$1"
+}
+
+# Exit 0 when FILE has no group or other permission bits (mode ?00).
+mode_is_private() {
+  local mode
+  mode="$(file_mode "$1")" || return 1
+  mode="${mode: -2}"
+  [[ "$mode" == "00" ]]
+}
+
 run_as_jdad() {
   if [[ "$(id -un)" == "$JDAD_USER" ]]; then
     "$@"

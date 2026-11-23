@@ -25,7 +25,11 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-asyncio_mode = "auto"
+# strict, not auto: every async test is @pytest.mark.anyio. In auto mode
+# pytest-asyncio also claimed the async `client` fixture, so its teardown ran
+# in a different task from its setup ("Attempted to exit cancel scope in a
+# different task") on macOS. The anyio plugin now owns the fixture end to end.
+asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
 
 [tool.hatch.build.targets.wheel]
