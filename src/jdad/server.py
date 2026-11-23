@@ -116,7 +116,7 @@ Rule zero: when changing performance, measure first. Profile or trace, fix the t
 
 @mcp.custom_route("/healthz", methods=["GET"])
 async def healthz(_request: Request) -> Response:
-    """Liveness probe. Unauthenticated even when JDAD_TOKEN is set."""
+    """Liveness probe. Unauthenticated even when JDAD_TOKEN is set; Host must be allowlisted."""
     return JSONResponse({"status": "ok"})
 
 
@@ -220,9 +220,11 @@ def check_http_bind(host: str, *, allow_no_auth: bool, token: str | None = None)
     )
 
 
-# Loopback Host/Origin values the MCP SDK allows by default for localhost binds.
+# Loopback Host/Origin values the MCP SDK allows by default for localhost binds,
+# plus the bare names: curl drops the default port, so `curl https://127.0.0.1/healthz`
+# on 443 (update-docker.sh in production) sends `Host: 127.0.0.1`.
 # Always included; JDAD_ALLOWED_HOSTS only adds public names. Protection stays on.
-_LOOPBACK_HOSTS = ("127.0.0.1:*", "localhost:*", "[::1]:*")
+_LOOPBACK_HOSTS = ("127.0.0.1", "127.0.0.1:*", "localhost", "localhost:*", "[::1]", "[::1]:*")
 _LOOPBACK_ORIGINS = (
     "http://127.0.0.1:*",
     "http://localhost:*",
@@ -310,10 +312,52 @@ def transport_security_settings() -> TransportSecuritySettings:
     )
 
 
+def host_is_allowed(host: str | None, allowed_hosts: list[str]) -> bool:
+    """Match a Host header the way the MCP SDK does: exact entry, or ``name:*`` for any port."""
+    if not host:
+        return False
+    if host in allowed_hosts:
+        return True
+    return any(
+        entry.endswith(":*") and host.startswith(entry[:-2] + ":") for entry in allowed_hosts
+    )
+
+
+class HostAllowlistMiddleware:
+    """Reject a request whose Host isn't allowlisted, on every path, before auth.
+
+    The SDK checks Host only on the MCP endpoint and only after BearerAuthMiddleware,
+    so /healthz answered any Host and a wrong Host without a token got 401. This
+    runs first and uses the same allowlist, so both get 421.
+    """
+
+    def __init__(self, app: Any, allowed_hosts: list[str]) -> None:
+        self.app = app
+        self.allowed_hosts = list(allowed_hosts)
+
+    async def __call__(self, scope: dict, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        host = None
+        for key, value in scope.get("headers") or []:
+            if key.lower() == b"host":
+                host = value.decode("latin-1")
+                break
+        if not host_is_allowed(host, self.allowed_hosts):
+            response = Response("Invalid Host header", status_code=421)
+            await response(scope, receive, send)
+            return
+        await self.app(scope, receive, send)
+
+
 def create_http_app():
     """Starlette app for streamable HTTP, with optional bearer auth and /healthz."""
-    app = mcp.streamable_http_app(transport_security=transport_security_settings())
+    security = transport_security_settings()
+    app = mcp.streamable_http_app(transport_security=security)
     app.add_middleware(BearerAuthMiddleware)
+    # Added last, so it is the outermost layer and runs before auth.
+    app.add_middleware(HostAllowlistMiddleware, allowed_hosts=security.allowed_hosts)
     return app
 
 
