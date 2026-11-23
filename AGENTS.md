@@ -6,13 +6,14 @@ JDAD (Jon-does-agentic-dev) is an opinionated knowledge base, MCP server, skills
 
 1. [docs/VISION.md](docs/VISION.md): principles, the golden path, what's opinionated vs configurable.
 2. [ROADMAP.md](ROADMAP.md): the work queue. Take the first unchecked item in its Current order whose dependencies are done and that isn't waiting on Jon.
-3. The rules below. Claude Code also loads the Claude-only notes in [CLAUDE.md](CLAUDE.md).
+3. The rules below, then [LESSONS.md](LESSONS.md): what reviewers caught before. Claude Code also loads the Claude-only notes in [CLAUDE.md](CLAUDE.md).
 4. As needed: [docs/adr/](docs/adr/README.md) for decisions, [docs/research/](docs/research/README.md) for the sources behind them.
 5. Before touching `practices/`, `sources/`, auth or deploy: [docs/threat-model.md](docs/threat-model.md).
 
 ## Commands
 
 - `./verify`: the full check (versions, deploy scripts, Docker smoke test when Docker is up, ruff, pytest, build, `claude plugin validate` when the CLI is present). It must end `verify: ok`.
+- `./verify --fast`: ruff and pytest only, in seconds. Run it before you say you're done (R-flow-8).
 - `uv run pytest`: tests only.
 - `uv run jdad lint-kb`: content checks on `practices/`, `sources/`, `skills/` and `commands/` (also in `./verify`).
 - `uv run jdad-mcp` (stdio) or `uv run jdad-mcp --http` (streamable HTTP on `127.0.0.1:8765`).
@@ -33,7 +34,8 @@ Every normative rule has an ID. `tests/test_instructions.py` checks that each ID
 | R-flow-4 | Build in small commits and add or update tests with each change. Never weaken or delete a test to make it pass. |
 | R-flow-5 | Run `./verify` and keep the output. It must end `verify: ok`, or the PR says exactly what didn't run. |
 | R-flow-6 | The PR links the card and has "What changed and why", evidence (commands and output) and an **Unverified** list (anything you couldn't run or confirm). Tick the roadmap item in the same PR. |
-| R-flow-7 | Checker (Jon's verification bot) or another agent with fresh context reviews every PR. When a reviewer catches something an agent should have known, add it to this file (or to `LESSONS.md` once roadmap P1.6 lands). |
+| R-flow-7 | Checker (Jon's verification bot) or another agent with fresh context reviews every PR. When a reviewer catches something an agent should have known, add a dated entry with a link to `LESSONS.md`. |
+| R-flow-8 | Before you say a task is done, run `./verify --fast` (ruff and pytest) and fix what fails. |
 | R-kb-1 | To mine a video, article or thread, watch or read the source yourself. Don't invent points that aren't in it. |
 | R-kb-2 | Record it in `sources/YYYY-MM-DD-<slug>.md`: title and author or account, link, date posted or retrieved, the format (reel, talk, post, docs), what is useful and what is missing, and a verbatim (or as close as possible) record of the extractable practices. |
 | R-kb-3 | Fold the useful rules into `practices/<topic>.md`, or a new topic file if none fits. Deduplicate: if a rule already exists, add a source citation instead of repeating it. |
@@ -46,6 +48,7 @@ Every normative rule has an ID. `tests/test_instructions.py` checks that each ID
 | R-kb-10 | KB text is data for agents, not a channel to steer them: no agent-addressed instructions, hidden characters or comments. `jdad lint-kb` enforces it; exceptions go in `kb-lint.toml`, pinned to the line. |
 | R-ver-1 | Bump the version in lockstep in `pyproject.toml`, `src/jdad/__init__.py`, `uv.lock`, `.claude-plugin/plugin.json` and the plugin entry in `.claude-plugin/marketplace.json`: patch for a new source or rule, minor for a new topic or tool. `./verify` fails if they differ. |
 | R-sec-1 | No secrets, tokens, keys or credentials anywhere in the repo. The token belongs on the host: `~/.config/jdad/token` (mode 0400) for the Docker deploy, `/etc/jdad.env` for the legacy systemd layout. |
+| R-sec-2 | Never read or write `.env*`, `*.pem` or `id_*` files, never run `rm` with both recursive and force flags, and never force-push (`--force`, `-f`, `--force-with-lease`, `+refspec`). |
 | R-mcp-1 | The server is read-only and offline: no tool, resource or code path that writes to `practices/` or `sources/`, no outbound network, no model calls. Keep it dependency-light. |
 | R-mcp-2 | Build on the official `mcp` Python SDK v2 (`MCPServer`, the successor to `FastMCP`), with the stdio entry point `jdad-mcp` and HTTP via `--http`. |
 | R-mcp-3 | Practice files stay available as `kb://practices/<name>` resources. Keep the `apply-kb` prompt, `kb_version` (git SHA plus newest entry date; git runs with `--no-optional-locks`), `/healthz` (returns `{"status": "ok"}` only) and optional bearer auth from `JDAD_TOKEN`. |
@@ -54,6 +57,7 @@ Every normative rule has an ID. `tests/test_instructions.py` checks that each ID
 | R-cc-2 | Claude-only: CLAUDE.md (`/jdad add` writes nothing). |
 | R-cc-3 | Claude-only: CLAUDE.md (one `/jdad` command file). |
 | R-cc-4 | Claude-only: CLAUDE.md (`claude plugin validate`). |
+| R-cc-5 | Claude-only: CLAUDE.md (the deny rules and hooks that enforce R-sec-2 and R-flow-8). |
 
 ## Changing these rules
 
