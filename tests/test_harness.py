@@ -368,6 +368,24 @@ def test_lessons_have_dates_and_links() -> None:
         "git push origin :main",  # branch deletion, outside R-sec-2 (force only)
         "git push --delete origin feat/x",
         "git push -d origin feat/x",
+        # Checker batch 11, follow-ups on JON-1357 (not modelled by the guard)
+        "$'\\x72m' -rf x",  # ANSI-C quoting
+        "{rm,-rf,x}",  # brace expansion
+        "r$(true)m -rf x",  # a word spliced from parts
+        "`echo rm` -rf x",
+        "IFS=,; X='rm,-rf,x'; $X",  # IFS splitting
+        "set -- -rf; rm \"$@\" x",  # positional parameters
+        "printf -v F %s -rf; rm $F x",  # variables set by builtins
+        "read F <<< '-rf'; rm $F x",
+        "mapfile -t A <<< '-rf'; rm ${A[0]} x",
+        "source <(echo 'rm -rf x')",  # sourcing a process substitution or stdin
+        ". /dev/stdin <<< 'rm -rf x'",
+        "env -S 'rm -rf x'",  # env's split-string
+        "trap 'rm -rf x' EXIT",
+        "PROMPT_COMMAND='rm -rf x' bash -i",  # environment hooks
+        "BASH_ENV=evil.sh bash -c true",
+        "eval \"$(echo cm0gLXJmIHg= | base64 -d)\"",  # eval of decoded text
+        "git push --mirr",  # an abbreviated --mirror
     ],
 )
 def test_known_gaps_are_documented_not_caught(command: str) -> None:
@@ -587,6 +605,23 @@ def test_time_budget_is_below_the_hook_timeout() -> None:
     spec.loader.exec_module(guard)
     hook_timeout = SETTINGS["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"]
     assert guard.TIME_BUDGET_SECONDS <= hook_timeout / 2
+
+
+def test_more_values_than_the_cap_is_denied_even_when_harmless() -> None:
+    """Over 8 possible values the guard can't check every argv, so it
+    denies instead of truncating, even for a harmless command."""
+    values = "; ".join(f"F=v{i}" for i in range(9))
+    result = run_hook(GUARD, bash(f"{values}; echo $F"))
+    assert "too many possible values" in json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+    assert decision(bash("F=v0; F=v1; echo $F")) == "allow"
+
+
+def test_device_paths_are_normalised() -> None:
+    """Case, doubled slashes and dot segments don't hide a device path."""
+    for command in ("bash //DEV//fd/3", "bash /dev/./fd/3", "bash /Proc/self/fd/3"):
+        result = run_hook(GUARD, bash(command))
+        reason = json.loads(result.stdout)["hookSpecificOutput"]["permissionDecisionReason"]
+        assert "device path" in reason, (command, reason)
 
 
 def test_nested_wrappers_are_checked_in_linear_time() -> None:
