@@ -437,6 +437,8 @@ BATCH10_DENY = [
     "rm ${FLAGS:--rf} x",
     "git push ${F:--f}",
     "export FLAGS='-r -f'; rm $FLAGS x",
+    "F='origin --force'; git push $F",  # an unquoted $F is split into words (Checker mutant N09)
+    "F='x -f'; git push $F",
     # survivors in Checker's mutation run
     r"find . -execdir rm -rf {} \;",
     r"find . -ok rm -rf {} \;",
