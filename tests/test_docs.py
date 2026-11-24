@@ -157,3 +157,36 @@ def test_accepted_adrs_only_claim_what_is_in_the_tree(path: Path) -> None:
         if "{" not in rel and not (REPO_ROOT / rel).exists()
     ]
     assert not missing, f"paths named in an Accepted ADR but absent: {missing}"
+
+
+# ---- deploy commands (Checker on #36, JON-1366) ----
+
+_FENCE_RE = re.compile(r"^```[a-z]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
+_COMPOSE_UP_RE = re.compile(r"\bdocker compose\b.*\bup\b")
+
+
+def _doc_files() -> list[Path]:
+    return [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").rglob("*.md"))]
+
+
+def test_every_documented_compose_up_sets_the_container_uid_and_gid() -> None:
+    """Without JDAD_UID/JDAD_GID, compose runs the container as 1000:1000, which may not
+    be able to read the 0400 token file or the TLS key (update-docker.sh exports both)."""
+    seen = 0
+    for path in _doc_files():
+        for block in _FENCE_RE.findall(path.read_text()):
+            exported: set[str] = set()
+            for line in block.splitlines():
+                exported |= set(re.findall(r"\bexport (JDAD_[UG]ID)=", line))
+                if _COMPOSE_UP_RE.search(line):
+                    seen += 1
+                    have = exported | set(re.findall(r"\b(JDAD_[UG]ID)=", line))
+                    assert {"JDAD_UID", "JDAD_GID"} <= have, f"{path.name}: {line.strip()}"
+    assert seen >= 2  # the first install and the manual rollback
+
+
+def test_readme_documents_the_manual_rollback() -> None:
+    text = (REPO_ROOT / "README.md").read_text()
+    section = text.split("**Manual rollback**", 1)[1].split("\n\n", 1)[1].split("\n### ", 1)[0]
+    for step in ("jdad:previous", "--no-build --force-recreate", "git reset -q --keep", "failed-sha", "io.jdad.token-file"):
+        assert step in section, step
