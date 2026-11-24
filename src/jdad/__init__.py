@@ -1,3 +1,3 @@
 """JDAD (Jon-does-agentic-dev): knowledge base and MCP server."""
 
-__version__ = "0.5.2"
+__version__ = "0.6.0"
