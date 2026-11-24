@@ -17,8 +17,8 @@ Use the jdad MCP tools when they are available: `list_topics`, `search_practices
 ## `review` — `/jdad review [what]`
 
 1. Review the named work (or the current diff) against the KB.
-2. Pull `get_checklist` with `phase="review"` for the tags that apply, and `get_practice` for any topic you rely on.
-3. Report gaps, not a generic style nitpick list. For each finding, cite the KB rule by its rule ID, with the source its checklist line links to.
+2. Call `review_against_kb` with the changed file paths and a one-line summary of the change. It infers the tags from the paths and returns the review checklist for those tags, the rules that match the summary, a rubric and the findings format. Add `tags` if the paths don't show them; for more rules, call `get_checklist` with `phase="review"`, or `get_practice` for a topic you rely on.
+3. Follow the rubric: correctness first, then the rules that apply; skip style. Report each finding as `rule_id / file / evidence / severity` (blocker, major or minor). Cite the KB rule by its rule ID, and give evidence from the diff. Use `correctness` as the rule_id for a correctness problem no rule covers. "No findings" is a valid result.
 4. Note `kb_version` so the review is pinned to a SHA.
 
 ## `perf` — `/jdad perf [what]`

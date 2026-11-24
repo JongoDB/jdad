@@ -25,6 +25,7 @@ EXPECTED_TOOLS = {
     "list_sources",
     "get_source",
     "get_checklist",
+    "review_against_kb",
     "kb_version",
 }
 
@@ -236,6 +237,10 @@ async def test_stdio_entry_point_serves_performance_content(newest_entry: str) -
         assert "Skeleton loaders" in practice
         version = tool_payload(await stdio_client.call_tool("kb_version"))
         assert version["newest_entry"] == newest_entry
+        review = tool_payload(
+            await stdio_client.call_tool("review_against_kb", {"changed_files": ["migrations/1.sql"], "summary": "add an index"})
+        )
+        assert review["tags"] == ["db"] and "perf.db.index-filters" in review["checklist"]
 
 
 def _free_port() -> int:
@@ -298,6 +303,10 @@ async def test_http_mode_serves_performance_content(http_server: _HttpServer, ne
         assert "Skeleton loaders" in practice
         version = tool_payload(await http_client.call_tool("kb_version"))
         assert version["newest_entry"] == newest_entry
+        review = tool_payload(
+            await http_client.call_tool("review_against_kb", {"changed_files": ["migrations/1.sql"], "summary": "add an index"})
+        )
+        assert review["tags"] == ["db"] and "perf.db.index-filters" in review["checklist"]
         assert version["sha"]
 
 
