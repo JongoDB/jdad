@@ -17,6 +17,7 @@ JDAD (Jon-does-agentic-dev) is an opinionated knowledge base, MCP server, skills
 - `uv run jdad build`: compile `catalog/` into the plugin's `skills/` and `generated/` (`--check` only compares).
 - `uv run pytest`: tests only.
 - `uv run jdad lint-kb`: content checks on `practices/`, `sources/`, `skills/` and `commands/` (also in `./verify`).
+- `uv run jdad freshness`: sources over a year old whose topic cites a newer source (a report, not a gate).
 - `uv run jdad-mcp` (stdio) or `uv run jdad-mcp --http` (streamable HTTP on `127.0.0.1:8765`).
 
 ## The server in brief
