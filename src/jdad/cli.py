@@ -5,6 +5,7 @@
   and generated/cursor-rules/.
 - `jdad freshness [--today DATE] [--strict]`: sources over a year old whose
   topic cites a newer source.
+- `jdad kb dupes [--threshold]`: rule pairs that look like duplicates (a report).
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from datetime import date
 from pathlib import Path
 
 from jdad import build as build_mod
+from jdad import dupes as dupes_mod
 from jdad.kb import resolve_kb_root
 from jdad.lint import lint_kb
 
@@ -68,6 +70,13 @@ def _freshness(args: argparse.Namespace) -> int:
     return 1 if lines and args.strict else 0
 
 
+def _kb_dupes(args: argparse.Namespace) -> int:
+    root = Path(args.root).resolve() if args.root else resolve_kb_root()
+    for line in dupes_mod.report(root, args.threshold):
+        print(line)
+    return 0  # a report for a human, never a gate
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="jdad", description="JDAD repo tooling.")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -83,6 +92,12 @@ def main(argv: list[str] | None = None) -> int:
     fresh.add_argument("--today", help="date to measure from, YYYY-MM-DD (default: today)")
     fresh.add_argument("--strict", action="store_true", help="exit 1 when anything is reported")
     fresh.set_defaults(func=_freshness)
+    kb = sub.add_parser("kb", help="Reports about the knowledge base.")
+    kb_sub = kb.add_subparsers(dest="kb_command", required=True)
+    dupes = kb_sub.add_parser("dupes", help="List rule pairs that look like duplicates (always exits 0).")
+    dupes.add_argument("--threshold", type=float, default=dupes_mod.THRESHOLD, help=f"cosine cutoff (default {dupes_mod.THRESHOLD})")
+    dupes.add_argument("--root", help="KB root (default: KB_ROOT, then this checkout).")
+    dupes.set_defaults(func=_kb_dupes)
     args = parser.parse_args(argv)
     return args.func(args)
 
