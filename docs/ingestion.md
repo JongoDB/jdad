@@ -42,7 +42,7 @@ For Daisy or any agent working in a checkout of `JongoDB/jdad`. The `jdad-ingest
 7. **Skill.** Copy the practice file's rule lines into `catalog/skills/jdad-<topic>/SKILL.md`, then `uv run jdad build`.
 8. **Version.** Patch bump for a new source or rules, minor for a new topic or tool, in all five files (AGENTS.md R-ver-1).
 9. **Check.** `uv run jdad lint-kb`, then `./verify` (it must end `verify: ok`, or the PR says exactly what didn't run). Confirm the entry through the tools: `list_sources` shows it, a search or `get_checklist` hits the new rules, and `kb_version` shows the new date.
-10. **PR.** Push the branch and open the PR from the template: the link, what was added and what was deduplicated, the `./verify` output, and an Unverified list. Post the Linear note with the head SHA. Checker reviews; the author doesn't merge.
+10. **PR.** Push the branch and open the PR with the sections AGENTS.md R-flow-6 asks for: the Linear card, What changed and why (the link, what was added and what was deduplicated), Evidence (the `./verify` output), and an Unverified list. Post the Linear note with the head SHA. Checker reviews; the author doesn't merge.
 
 ## Session transcripts and agent logs stay out
 

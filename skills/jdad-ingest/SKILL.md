@@ -24,7 +24,7 @@ Check that `practices/`, `sources/` and `sources/_TEMPLATE.md` exist at the repo
 7. Copy the practice file's rule lines into `catalog/skills/jdad-<topic>/SKILL.md` and run `uv run jdad build`. Never edit `skills/` or `generated/` by hand.
 8. Bump the version in all five files: patch for a source or rules, minor for a new topic or tool.
 9. Run `uv run jdad lint-kb` and `./verify`, and check the new entry through `list_sources`, a search or checklist, and `kb_version`.
-10. Push and open the PR from the template (link, what was added or deduplicated, `./verify` output, Unverified list), then post the Linear note with the head SHA. Don't merge it yourself.
+10. Push and open the PR with the R-flow-6 sections: the Linear card, What changed and why (link, what was added or deduplicated), Evidence (`./verify` output) and an Unverified list. Then post the Linear note with the head SHA. Don't merge it yourself.
 
 ## Never in the repo
 

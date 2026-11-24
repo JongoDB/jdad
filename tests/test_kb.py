@@ -59,12 +59,12 @@ def test_source_round_trip() -> None:
     assert "31 items" in text or "Skeleton" in text
 
 
-def test_version_includes_sha_and_newest_entry() -> None:
+def test_version_includes_sha_and_newest_entry(newest_entry: str) -> None:
     info = KnowledgeBase(REPO_ROOT).version()
     assert info["sha"]
     assert info["sha"] != "unknown"
-    assert info["newest_entry"] == "2026-11-22"
-    assert "2026-11-22" in info["display"]
+    assert info["newest_entry"] == newest_entry
+    assert newest_entry in info["display"]
     assert info["sha"] in info["display"]
 
 

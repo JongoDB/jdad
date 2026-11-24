@@ -140,13 +140,13 @@ async def test_get_checklist_filters_tags(client: Client) -> None:
 
 
 @pytest.mark.anyio
-async def test_kb_version_tool(client: Client) -> None:
+async def test_kb_version_tool(client: Client, newest_entry: str) -> None:
     info = tool_payload(await client.call_tool("kb_version"))
     assert isinstance(info, dict)
     assert info["sha"]
     assert info["sha"] != "unknown"
-    assert info["newest_entry"] == "2026-11-22"
-    assert "2026-11-22" in info["display"]
+    assert info["newest_entry"] == newest_entry
+    assert newest_entry in info["display"]
 
 
 @pytest.mark.anyio
@@ -220,7 +220,7 @@ async def test_get_source_results_start_with_the_quoted_material_header() -> Non
 
 
 @pytest.mark.anyio
-async def test_stdio_entry_point_serves_performance_content() -> None:
+async def test_stdio_entry_point_serves_performance_content(newest_entry: str) -> None:
     server = StdioServerParameters(
         command="uv",
         args=["run", "jdad-mcp"],
@@ -235,7 +235,7 @@ async def test_stdio_entry_point_serves_performance_content() -> None:
         )
         assert "Skeleton loaders" in practice
         version = tool_payload(await stdio_client.call_tool("kb_version"))
-        assert version["newest_entry"] == "2026-11-22"
+        assert version["newest_entry"] == newest_entry
 
 
 def _free_port() -> int:
@@ -288,7 +288,7 @@ def test_healthz_is_open_and_returns_only_ok(http_server: _HttpServer) -> None:
 
 
 @pytest.mark.anyio
-async def test_http_mode_serves_performance_content(http_server: _HttpServer) -> None:
+async def test_http_mode_serves_performance_content(http_server: _HttpServer, newest_entry: str) -> None:
     async with Client(f"{http_server.base}/mcp") as http_client:
         topics = tool_payload(await http_client.call_tool("list_topics"))
         assert any(item["topic"] == "performance" for item in topics)
@@ -297,7 +297,7 @@ async def test_http_mode_serves_performance_content(http_server: _HttpServer) ->
         )
         assert "Skeleton loaders" in practice
         version = tool_payload(await http_client.call_tool("kb_version"))
-        assert version["newest_entry"] == "2026-11-22"
+        assert version["newest_entry"] == newest_entry
         assert version["sha"]
 
 
