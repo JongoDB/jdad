@@ -139,3 +139,11 @@ def test_jdad_plan_and_review_cite_rule_ids(name: str) -> None:
     section = _command_section(name)
     assert f'phase="{name}"' in section
     assert "rule ID" in section and "cite" in section.lower()
+
+
+def test_kb_additions_are_spelled_the_same_whatever_the_source_case(tmp_path: Path) -> None:
+    """The parser accepts '(kb addition)' in any case; the checklist always says '(KB addition)'."""
+    (tmp_path / "practices").mkdir()
+    (tmp_path / "sources").mkdir()
+    (tmp_path / "practices" / "t.md").write_text("# T\n## A [backend]\n- Do a thing. (kb addition) {#t.a.thing}\n")
+    assert items(KnowledgeBase(tmp_path).get_checklist([])) == ["- [ ] t.a.thing: Do a thing. (KB addition)"]
