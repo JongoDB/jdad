@@ -1,0 +1,58 @@
+{
+  "_about": "Labeled rule pairs for `jdad kb dupes` (roadmap P2.2, JON-1362). Written before any scores were computed. duplicate = the same rule with only case, spacing or punctuation changed; paraphrase = the same instruction reworded; distinct = a nearby rule that says something different. kb_distinct names pairs of real rule IDs in practices/ that are different rules.",
+  "duplicate": [
+    ["Paginate every list endpoint.", "Paginate every list endpoint"],
+    ["Add an index for every column you filter or join on.", "add an index for every column you filter or join on."],
+    ["Set a timeout on every outbound HTTP call.", "Set a  timeout on every outbound HTTP call!"],
+    ["Never log secrets, tokens or passwords.", "Never log secrets, tokens, or passwords."],
+    ["Lazy-load images below the fold.", "lazy load images below the fold"],
+    ["Run the full test suite before you say a task is done.", "Run the full test suite before you say a task is done"]
+  ],
+  "paraphrase": [
+    ["Paginate every list endpoint.", "Every endpoint that returns a list should be paginated."],
+    ["Add an index for every column you filter or join on.", "Columns used in filters or joins need an index."],
+    ["Set a timeout on every outbound HTTP call.", "Outbound HTTP calls must always have a timeout."],
+    ["Never log secrets, tokens or passwords.", "Don't write passwords, tokens or other secrets to the logs."],
+    ["Lazy-load images below the fold.", "Images below the fold should load lazily."],
+    ["Run the full test suite before you say a task is done.", "Before calling a task done, run the whole test suite."],
+    ["Cache expensive queries and invalidate the cache on write.", "Expensive queries should be cached, with the cache invalidated when data is written."],
+    ["Retry failed requests with exponential backoff and jitter.", "Use exponential backoff with jitter when retrying a failed request."],
+    ["Pin every dependency to an exact version in the lockfile.", "The lockfile should pin each dependency to an exact version."],
+    ["Keep each pull request to one change you can review in one sitting.", "A pull request should hold one change, small enough to review in one sitting."],
+    ["Return actionable error messages that tell the caller what to do next.", "Error messages should be actionable and tell the caller what to do next."],
+    ["Load secrets from the environment, never from the repository.", "Secrets come from the environment and never from files in the repository."],
+    ["Measure performance before you optimise anything.", "Don't optimise anything until you've measured its performance."],
+    ["Use a reviewer that didn't write the code.", "The code should be reviewed by someone other than its author."],
+    ["Write the plan down before writing code.", "Before you write any code, write down the plan."]
+  ],
+  "distinct": [
+    ["Paginate every list endpoint.", "Version every public API endpoint."],
+    ["Add an index for every column you filter or join on.", "Drop indexes that no query uses."],
+    ["Set a timeout on every outbound HTTP call.", "Log the duration of every outbound HTTP call."],
+    ["Never log secrets, tokens or passwords.", "Rotate tokens and passwords on a schedule."],
+    ["Lazy-load images below the fold.", "Serve images in a modern format such as AVIF or WebP."],
+    ["Run the full test suite before you say a task is done.", "Run the fast test subset on every save."],
+    ["Cache expensive queries and invalidate the cache on write.", "Batch writes to the database inside one transaction."],
+    ["Retry failed requests with exponential backoff and jitter.", "Make every write request idempotent with a request key."],
+    ["Pin every dependency to an exact version in the lockfile.", "Update dependencies weekly with an automated pull request."],
+    ["Keep each pull request to one change you can review in one sitting.", "Link every pull request to its tracking card."],
+    ["Return actionable error messages that tell the caller what to do next.", "Return the smallest response that answers the request."],
+    ["Load secrets from the environment, never from the repository.", "Scan the repository history for leaked secrets."],
+    ["Measure performance before you optimise anything.", "Set a performance budget for each page."],
+    ["Use a reviewer that didn't write the code.", "Require a passing CI run before merging the code."],
+    ["Write the plan down before writing code.", "Delete dead code as soon as you find it."]
+  ],
+  "_kb_distinct_about": "The highest-scoring rule pairs in practices/, each read and labeled by hand: related, but different instructions. The first eight are from main ef7ebf2 (93 rules); the last two are the new top-8 pairs after #33 added agent-tools (main 3ad71e7, 112 rules).",
+  "kb_distinct": [
+    ["wf.session.commit-and-note", "wf.session.read-state"],
+    ["wf.harness.ablate-one-at-a-time", "wf.plan.one-feature"],
+    ["wf.plan.hand-over-material", "wf.verify.evidence"],
+    ["wf.session.initializer", "wf.session.read-state"],
+    ["wf.repo.plans-in-repo", "wf.repo.system-of-record"],
+    ["wf.harness.ablate-one-at-a-time", "wf.harness.retest-on-new-model"],
+    ["wf.arch.invariants", "wf.plan.deliverables-not-path"],
+    ["wf.session.json-task-list", "wf.session.reset-with-handoff"],
+    ["tools.eval.read-transcripts", "wf.repo.omit-discoverable"],
+    ["tools.choose.consolidate", "tools.eval.realistic-tasks"]
+  ]
+}

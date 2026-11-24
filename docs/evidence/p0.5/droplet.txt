@@ -1,0 +1,162 @@
+# Droplet checks (ssh droplet via Jon's Mac), 2026-11-22 2:44:36 PM EST / 2026-11-22T19:44:36Z
+# Token read from ~/.config/jdad/jdad.env inside the command; every occurrence redacted.
+
+$ docker ps -a --format "table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+NAMES               IMAGE                                           STATUS                     PORTS
+jdad-jdad-1         jdad:c90178b88e9a6ea761ae7f5fb46c11b09e1469ae   Up 9 minutes (healthy)     8765/tcp, 0.0.0.0:443->8443/tcp, [::]:443->8443/tcp
+netbird-proxy       netbirdio/reverse-proxy:latest                  Exited (0) 9 minutes ago   
+netbird-traefik     traefik:v3.6                                    Exited (0) 9 minutes ago   
+netbird-server      netbirdio/netbird-server:latest                 Exited (0) 9 minutes ago   
+netbird-dashboard   netbirdio/dashboard:latest                      Exited (0) 9 minutes ago   
+
+$ docker inspect jdad-jdad-1 --format <hardening fields>   # Config.Env deliberately not dumped (holds the token)
+Image=jdad:c90178b88e9a6ea761ae7f5fb46c11b09e1469ae
+ImageID=sha256:d19f6534571096f003dffae6fe2f6396d5fe41b7d7241ed4470cccb4eb12ea4c
+User=1000:1000
+ReadonlyRootfs=true
+CapDrop=[ALL]
+CapAdd=[]
+SecurityOpt=[no-new-privileges:true]
+Privileged=false
+Tmpfs=map[/tmp:]
+PortBindings={"8443/tcp":[{"HostIp":"","HostPort":"443"}]}
+Mounts=/home/ubuntu/.config/jdad/tls->/tls rw=false 
+RestartPolicy=unless-stopped
+Health=healthy
+StartedAt=2026-11-22T19:35:12.054940227Z
+
+$ docker exec jdad-jdad-1 sh -c "id; echo JDAD_GIT_SHA=\$JDAD_GIT_SHA; touch /probe"
+uid=1000 gid=1000 groups=1000
+JDAD_GIT_SHA=c90178b88e9a6ea761ae7f5fb46c11b09e1469ae
+touch: cannot touch '/probe': Read-only file system
+
+$ git -C ~/jdad rev-parse HEAD
+c90178b88e9a6ea761ae7f5fb46c11b09e1469ae
+
+$ ss -ltn "( sport = :80 or sport = :443 )"
+State  Recv-Q Send-Q Local Address:Port Peer Address:PortProcess
+LISTEN 0      4096         0.0.0.0:443       0.0.0.0:*          
+LISTEN 0      4096            [::]:443          [::]:*          
+
+$ curl -sS -m 5 -i http://127.0.0.1:80/
+curl: (7) Failed to connect to 127.0.0.1 port 80 after 0 ms: Couldn't connect to server
+curl exit=7
+
+$ openssl x509 -in ~/.config/jdad/tls/origin.crt -noout -subject -issuer -dates -fingerprint -sha256 -ext subjectAltName
+subject=O = "CloudFlare, Inc.", OU = CloudFlare Origin CA, CN = CloudFlare Origin Certificate
+issuer=C = US, O = "CloudFlare, Inc.", OU = CloudFlare Origin SSL Certificate Authority, L = San Francisco, ST = California
+notBefore=Nov 22 19:27:00 2026 GMT
+notAfter=Nov 18 19:27:00 2041 GMT
+sha256 Fingerprint=A6:BE:24:00:74:7E:EF:B1:8B:B7:FC:66:D5:5F:D0:AB:7B:77:04:43:60:A8:21:76:26:E4:53:C8:3A:CE:14:02
+X509v3 Subject Alternative Name: 
+    DNS:*.jondevs.com, DNS:jondevs.com
+$ cert pubkey sha256 vs key pubkey sha256
+cert: 85d726f7005f39388a45a07f1ffb07ed43aabe79fe9a7d8e043138c33455f9e9
+key:  85d726f7005f39388a45a07f1ffb07ed43aabe79fe9a7d8e043138c33455f9e9
+
+$ openssl x509 -in origin_ca_rsa_root.pem -noout -subject -fingerprint -sha256   # fetched from developers.cloudflare.com
+subject=C = US, O = "CloudFlare, Inc.", OU = CloudFlare Origin SSL Certificate Authority, L = San Francisco, ST = California
+sha256 Fingerprint=D3:C7:E8:5C:91:70:7F:C0:A1:2A:BC:5D:88:26:67:47:AA:4F:A8:E7:B1:62:F6:33:FF:B3:C9:D9:89:94:76:20
+
+$ curl -sS -i --cacert origin_ca_rsa_root.pem --resolve jdad-mcp.jondevs.com:443:127.0.0.1 -w "\nssl_verify_result=%{ssl_verify_result} http_code=%{http_code}\n" https://jdad-mcp.jondevs.com/healthz
+HTTP/1.1 200 OK
+date: Sun, 22 Nov 2026 19:44:37 GMT
+server: uvicorn
+content-length: 15
+content-type: application/json
+
+{"status":"ok"}
+ssl_verify_result=0 http_code=200
+
+$ curl -sS -i -k --resolve jdad-mcp.jondevs.com:443:127.0.0.1 -X POST https://jdad-mcp.jondevs.com/mcp -H "Host: evil.example.com" -H "Authorization: Bearer [REDACTED]" ... initialize   # origin, unlisted Host
+HTTP/1.1 421 Misdirected Request
+date: Sun, 22 Nov 2026 19:44:37 GMT
+server: uvicorn
+content-length: 19
+
+Invalid Host header
+
+$ curl -sS -i -X POST https://jdad-mcp.jondevs.com/mcp -H "Authorization: Bearer [REDACTED]" ... initialize   # public, via Cloudflare
+# [annotation added after capture] This is the WRONG-token request: the command sent the literal header "Authorization: Bearer wrong-token"; the generic "Bearer <value>" redaction filter also masked that literal in this echo line.
+HTTP/2 401 
+date: Sun, 22 Nov 2026 19:44:37 GMT
+content-type: application/json
+content-length: 24
+server: cloudflare
+cf-cache-status: DYNAMIC
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=I8EYTHa4%2F1sBXqWO%2BP2%2Fpnh%2FxJXOe5iOyY4u%2F9WG%2F9OQwyvbkOrdRCtKI1Ok1g1wDn8b%2BkxZWFSzA2%2F9osPdYeLVTo0wmIKewYg7VjXjn0vw1gLypq08oyGt5IfVnRRVNLqnWUpHNQ%3D%3D"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+cf-ray: a5ea6e0c2adf46ff-EWR
+alt-svc: h3=":443"; ma=86400
+
+{"error":"unauthorized"}
+
+$ curl -sS -i -X POST https://jdad-mcp.jondevs.com/mcp -H "Authorization: Bearer [REDACTED]" ... initialize   # public, via Cloudflare
+HTTP/2 200 
+date: Sun, 22 Nov 2026 19:44:37 GMT
+content-type: text/event-stream
+server: cloudflare
+cache-control: no-cache, no-transform
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+mcp-session-id: [REDACTED]
+cf-cache-status: DYNAMIC
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=fqvb2dmmFYLdggSn5BIk6E4RiVHSpBUMaEuKU02LkjWV%2FrLKIaP6heWYLLP5oAL40PkC5oEP%2FB85%2BOZtIHwqCmdUm67AmwrhxMKY2uUEx53wg%2FumpeysztmgSXhoxsAZ9pAFdPuJkA%3D%3D"}]}
+cf-ray: a5ea6e0d0a6937a9-EWR
+alt-svc: h3=":443"; ma=86400
+
+event: message
+data: {"jsonrpc":"2.0","id":1,"result":{"capabilities":{"prompts":{"listChanged":false},"resources":{"listChanged":false,"subscribe":false},"tools":{"listChanged":false}},"instructions":"Read-only knowledge base of Jon's agentic-dev practices (JDAD). Call get_checklist or search_practices before planning, and cite the rules you follow in the PR. Call kb_version when you need the SHA or the date of the newest entry.","protocolVersion":"2025-06-18","serverInfo":{"name":"jdad","version":"0.1.6"}}}
+
+
+
+$ curl ... notifications/initialized (Mcp-Session-Id: [REDACTED])
+HTTP/2 202 
+date: Sun, 22 Nov 2026 19:44:38 GMT
+content-type: application/json
+content-length: 0
+server: cloudflare
+mcp-session-id: [REDACTED]
+cf-cache-status: DYNAMIC
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=Vp1nC9xUdpzDX8fRWJ8P5h3vrMc%2FEbuP276Vz3u%2Bnsf6u0I2BK%2B688jUFKI3i%2BoSeiyu2hPCe8i8zZirXkoLY0SjJoPjJ6lAgfE0jCL7A1G8yuHknUEiJE%2BUkpue%2FONh0tJyDF%2BxXQ%3D%3D"}]}
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+cf-ray: a5ea6e0deeeaf6b4-EWR
+alt-svc: h3=":443"; ma=86400
+
+
+
+$ curl ... tools/list
+HTTP/2 200 
+date: Sun, 22 Nov 2026 19:44:38 GMT
+content-type: text/event-stream
+server: cloudflare
+cache-control: no-cache, no-transform
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+mcp-session-id: [REDACTED]
+cf-cache-status: DYNAMIC
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=z0KwgnVgCQblw44H15n%2BxIuIVTPgdIGTvKhk25ogIdT5pwsYT4HWzVgmDq01sLMYdD5jsy8wKxZZiXtxXwpAkOCAOnJlaPFW0BXFUutHUjT%2F05pui22mALTqKa%2FdA7iOBWPgqUJBwA%3D%3D"}]}
+cf-ray: a5ea6e0ebf983b96-EWR
+alt-svc: h3=":443"; ma=86400
+
+event: message
+data: {"jsonrpc":"2.0","id":2,"result":{"tools":[{"annotations":{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true},"description":"List practice files with their tags and section headings.","inputSchema":{"properties":{},"type":"object","title":"list_topicsArguments"},"name":"list_topics","outputSchema":{"properties":{"result":{"items":{"additionalProperties":true,"type":"object"},"title":"Result","type":"array"}},"required":["result"],"type":"object","title":"list_topicsOutput"}},{"annotations":{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true},"description":"Keyword search over practice sections, returning matched file, heading, and body.\n\n    Optional tag filter: frontend, backend, db, infra, observability, or testing.\n    ","inputSchema":{"properties":{"query":{"title":"Query","type":"string"},"tag":{"anyOf":[{"type":"string"},{"type":"null"}],"default":null,"title":"Tag"}},"required":["query"],"type":"object","title":"search_practicesArguments"},"name":"search_practices","outputSchema":{"properties":{"result":{"items":{"additionalProperties":true,"type":"object"},"title":"Result","type":"array"}},"required":["result"],"type":"object","title":"search_practicesOutput"}},{"annotations":{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true},"description":"Return the full practice file for a topic (for example, 'performance').","inputSchema":{"properties":{"topic":{"title":"Topic","type":"string"}},"required":["topic"],"type":"object","title":"get_practiceArguments"},"name":"get_practice","outputSchema":{"properties":{"result":{"title":"Result","type":"string"}},"required":["result"],"type":"object","title":"get_practiceOutput"}},{"annotations":{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true},"description":"List source notes that the practice rules were drawn from.","inputSchema":{"properties":{},"type":"object","title":"list_sourcesArguments"},"name":"list_sources","outputSchema":{"properties":{"result":{"items":{"additionalProperties":true,"type":"object"},"title":"Result","type":"array"}},"required":["result"],"type":"object","title":"list_sourcesOutput"}},{"annotations":{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true},"description":"Return a source note by id (filename stem, for example '2026-11-22-breakingbreach-app-performance').","inputSchema":{"properties":{"id":{"title":"Id","type":"string"}},"required":["id"],"type":"object","title":"get_sourceArguments"},"name":"get_source","outputSchema":{"properties":{"result":{"title":"Result","type":"string"}},"required":["result"],"type":"object","title":"get_sourceOutput"}},{"annotations":{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true},"description":"Return bullet rules filtered by tags, ready to paste into a plan.\n\n    Tags: frontend, backend, db, infra, observability, testing. An empty list returns every rule.\n    ","inputSchema":{"properties":{"tags":{"items":{"type":"string"},"title":"Tags","type":"array"}},"required":["tags"],"type":"object","title":"get_checklistArguments"},"name":"get_checklist","outputSchema":{"properties":{"result":{"title":"Result","type":"string"}},"required":["result"],"type":"object","title":"get_checklistOutput"}},{"annotations":{"destructiveHint":false,"idempotentHint":true,"openWorldHint":false,"readOnlyHint":true},"description":"Return the knowledge-base version: git SHA and the date of the newest source entry.","inputSchema":{"properties":{},"type":"object","title":"kb_versionArguments"},"name":"kb_version","outputSchema":{"type":"object","additionalProperties":true,"title":"kb_versionDictOutput"}}]}}
+
+
+
+$ curl ... tools/call kb_version
+HTTP/2 200 
+date: Sun, 22 Nov 2026 19:44:38 GMT
+content-type: text/event-stream
+server: cloudflare
+cache-control: no-cache, no-transform
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+mcp-session-id: [REDACTED]
+cf-cache-status: DYNAMIC
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=%2FD%2F%2Fc9T4tju2uhlZc%2BvXC%2BfU5BOS7LocWqmX6rY%2FEXKnQdzUShtBfHHolov7lzxn4058%2FNthe8yVT6DxhupddZ4v6aVvhUHovSo8wsP6rb230kDpB5NHpx2l6%2F%2F5riugQVBk05zOqQ%3D%3D"}]}
+cf-ray: a5ea6e0f9db203ae-EWR
+alt-svc: h3=":443"; ma=86400
+
+event: message
+data: {"jsonrpc":"2.0","id":3,"result":{"content":[{"text":"{\n  \"sha\": \"c90178b88e9a6ea761ae7f5fb46c11b09e1469ae\",\n  \"dirty\": false,\n  \"newest_entry\": \"2026-11-22\",\n  \"display\": \"c90178b88e9a6ea761ae7f5fb46c11b09e1469ae (2026-11-22)\"\n}","type":"text"}],"isError":false,"structuredContent":{"sha":"c90178b88e9a6ea761ae7f5fb46c11b09e1469ae","dirty":false,"newest_entry":"2026-11-22","display":"c90178b88e9a6ea761ae7f5fb46c11b09e1469ae (2026-11-22)"}}}
+
+
+# end 2:44:38 PM EST

@@ -2,12 +2,17 @@
 # Cloudflare's orange-cloud proxy can reach it with Full (strict) TLS.
 # Run as the deploy user from the repo checkout (no passwordless sudo).
 #
-# Env file (mode 0600): ~/.config/jdad/jdad.env — must set a non-empty
-# JDAD_TOKEN. Origin cert/key: ~/.config/jdad/tls/{origin.crt,origin.key}.
+# Token file (mode 0400, owned by the deploy user): ~/.config/jdad/token,
+# mounted as a compose secret at /run/secrets/jdad_token and read once at
+# startup through JDAD_TOKEN_FILE, so the value never sits in the container
+# environment or `docker inspect`. Env file (mode 0600): ~/.config/jdad/jdad.env,
+# which must NOT set JDAD_TOKEN (the server refuses both). Origin cert/key:
+# ~/.config/jdad/tls/{origin.crt,origin.key}.
 # Build with JDAD_GIT_SHA=$(git rev-parse HEAD).
 #
-# Do not paste `docker compose config` output anywhere: it expands
-# env_file values, including JDAD_TOKEN.
+# Don't paste `docker compose config` output anywhere: it expands env_file
+# values. (After the token moved to a file it no longer contains the token,
+# but keep the habit.)
 
 name: jdad
 
@@ -31,11 +36,25 @@ services:
       JDAD_ALLOWED_HOSTS: jdad-mcp.jondevs.com
       JDAD_SSL_CERTFILE: /tls/origin.crt
       JDAD_SSL_KEYFILE: /tls/origin.key
+      JDAD_TOKEN_FILE: /run/secrets/jdad_token
+    secrets:
+      - jdad_token
     volumes:
       - ${HOME}/.config/jdad/tls:/tls:ro
     read_only: true
     tmpfs:
       - /tmp
+    # The droplet has 2 GB and 1 vCPU, shared with sshd and Docker. JDAD
+    # idles well under 100 MB; these caps keep a leak or a flood inside the
+    # container instead of taking the host down.
+    mem_limit: 512m
+    pids_limit: 256
+    cpus: 1.0
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     cap_drop:
       - ALL
     security_opt:
@@ -52,3 +71,9 @@ services:
       timeout: 5s
       start_period: 15s
       retries: 3
+
+secrets:
+  jdad_token:
+    # Without compose's swarm mode this is a read-only bind mount of the host
+    # file, so its owner and mode (deploy uid, 0400) carry into the container.
+    file: ${JDAD_TOKEN_FILE_HOST:-${HOME}/.config/jdad/token}

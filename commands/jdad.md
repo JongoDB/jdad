@@ -5,20 +5,20 @@ argument-hint: plan | review | perf | add <url>
 
 You are running the JDAD `/jdad` command. Route on the first word of `$ARGUMENTS`. The rest of the argument string is the task or URL.
 
-Use the jdad MCP tools when they are available: `list_topics`, `search_practices`, `get_practice`, `get_checklist`, `list_sources`, `get_source`, and `kb_version`. Cite KB rules (topic, heading, and source) in any plan or PR.
+Use the jdad MCP tools when they are available: `list_topics`, `search_practices`, `get_practice`, `get_checklist`, `list_sources`, `get_source`, and `kb_version`. Cite KB rules by their rule ID (for example `perf.db.n-plus-one`) in any plan, review or PR.
 
 ## `plan` — `/jdad plan [task]`
 
 1. Read the current task (the remainder of `$ARGUMENTS`, plus the conversation and repo).
-2. Call `list_topics`, then `get_checklist` with the tags that apply (`frontend`, `backend`, `db`, `infra`, `observability`, `testing`). If the tags are unclear, `search_practices` first.
-3. Write a short plan that includes the matching checklist. Do not invent rules that are not in the KB, and do not apply a rule whose tag does not fit.
+2. Call `list_topics`, then `get_checklist` with `phase="plan"` and the tags that apply (`frontend`, `backend`, `db`, `infra`, `observability`, `testing`, `security`, `supply-chain`, `ci`, `process`, `design`, `ux`). If the tags are unclear, `search_practices` first.
+3. Write a short plan that includes the matching checklist and cite each rule you'll follow by its rule ID. Do not invent rules that are not in the KB, and do not apply a rule whose tag does not fit.
 4. Call `kb_version` and mention the SHA and newest-entry date in the plan.
 
 ## `review` — `/jdad review [what]`
 
 1. Review the named work (or the current diff) against the KB.
-2. Pull `get_checklist` for the tags that apply, and `get_practice` for any topic you rely on.
-3. Report gaps, not a generic style nitpick list. For each finding, cite the KB rule (topic, heading, source).
+2. Pull `get_checklist` with `phase="review"` for the tags that apply, and `get_practice` for any topic you rely on.
+3. Report gaps, not a generic style nitpick list. For each finding, cite the KB rule by its rule ID, with the source its checklist line links to.
 4. Note `kb_version` so the review is pinned to a SHA.
 
 ## `perf` — `/jdad perf [what]`

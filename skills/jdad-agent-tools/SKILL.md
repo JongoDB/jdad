@@ -1,0 +1,57 @@
+---
+name: jdad-agent-tools
+description: Use when designing, building or reviewing tools for AI agents - MCP servers and tool sets, tool names and descriptions, parameters, response formats, pagination and truncation, error messages, tool annotations, or evaluating tools with agents. Applies Jon's JDAD agent-tools checklist.
+metadata:
+  generated: jdad build from catalog/skills/jdad-agent-tools/SKILL.md; do not edit
+---
+
+# JDAD agent tools
+
+These rules come from `practices/agent-tools.md` in the JDAD knowledge base. Prefer the jdad MCP tools (`get_practice` with `agent-tools`, or `get_checklist` with `design`) when they are available, so you are on the latest SHA. Cite rules in the plan and the PR by rule ID (for example `tools.respond.actionable-errors`) and source.
+
+Each rule ends with its citation and its ID.
+
+## Choosing tools [design] [backend]
+- Build a few tools for high-impact workflows instead of wrapping every API endpoint. (src: anthropic-tools #10) {#tools.choose.few-targeted}
+  Phase: plan
+- Prefer a task-level tool, such as a search, over one that lists everything. (src: anthropic-tools #11) {#tools.choose.search-over-list}
+  Phase: plan
+- Fold a multi-step lookup the agent frequently chains into one tool. (src: anthropic-tools #12) {#tools.choose.consolidate}
+  Phase: plan
+- Give each tool one clear purpose that no other tool overlaps. (src: anthropic-tools #13) {#tools.choose.distinct-purpose}
+  Phase: plan, review
+- Prefix related tool names by service and resource. (src: anthropic-tools #14) {#tools.choose.namespace}
+  Applies when: an agent sees tools from more than one server or service.
+  Phase: review
+## Responses [design] [backend]
+- Return high-signal fields, such as names and types, and leave out low-level identifiers the agent can't use. (src: anthropic-tools #15) {#tools.respond.high-signal}
+  Phase: plan, review
+- Let the agent choose a concise or a detailed response format. (src: anthropic-tools #16) {#tools.respond.format-choice}
+  Phase: plan
+- Bound large responses with pagination, filtering or truncation, with sensible defaults. (src: anthropic-tools #18) {#tools.respond.bound-size}
+  Phase: review
+- When a response is truncated, say how to get the rest efficiently, such as with narrower searches. (src: anthropic-tools #19) {#tools.respond.truncation-hint}
+  Phase: review
+- Make error messages say what went wrong and how to fix the call, not an opaque code or traceback. (src: anthropic-tools #20) {#tools.respond.actionable-errors}
+  Phase: review
+## Descriptions [design]
+- Describe each tool the way you would to a new teammate, spelling out implicit context and niche terms. (src: anthropic-tools #21) {#tools.describe.new-hire}
+  Phase: review
+- Name parameters unambiguously, such as user_id rather than user. (src: anthropic-tools #22) {#tools.describe.unambiguous-params}
+  Phase: review
+- Annotate tools that reach the open world or make destructive changes. (src: anthropic-tools #24) {#tools.describe.annotations}
+  Applies when: the tools are served over MCP.
+  Phase: review, ship
+## Evaluate [design] [testing]
+- Prototype tools quickly and try them locally before settling the design. (src: anthropic-tools #1) {#tools.eval.prototype-first}
+  Phase: plan
+- Evaluate tools on realistic, multi-step tasks with verifiable outcomes. (src: anthropic-tools #2, #3) {#tools.eval.realistic-tasks}
+  Phase: plan, ship
+- Track tool calls, errors, runtime and tokens, not only task success. (src: anthropic-tools #4) {#tools.eval.track-metrics}
+  Phase: plan
+- Read the agents' evaluation transcripts, including what they leave out. (src: anthropic-tools #6) {#tools.eval.read-transcripts}
+  Phase: review
+- Keep a held-out task set so tool changes don't overfit the evaluation. (src: anthropic-tools #9) {#tools.eval.held-out}
+  Phase: plan
+- Measure description changes in the evaluation, since small edits can change results a lot. (src: anthropic-tools #23) {#tools.eval.measure-descriptions}
+  Phase: review, ship

@@ -4,7 +4,7 @@ Read [docs/VISION.md](docs/VISION.md) first. This file is the work queue for age
 
 ## How to use this file
 
-1. Take the **first unchecked item** whose dependencies are checked and that isn't marked **Needs Jon** (or whose Jon input is already recorded on its card or as a **Decision** line here).
+1. Take the **first unchecked item in [Current order](#current-order)** whose dependencies are checked and that isn't marked **Needs Jon** (or whose Jon input is already recorded on its card or as a **Decision** line here). Items not listed there follow in file order.
 2. Find or create its Linear card (workspace `jongodb`, team `JON`, project `JDAD`) and post a plan there before writing code: steps, risks, and how each acceptance criterion will be verified.
 3. Work on a branch, run `./verify`, and open a PR that links the card, shows evidence (commands and output), and lists anything unverified. Checker reviews it. Don't merge your own PR.
 4. In the same PR, tick the item here (`- [x]`) and add the PR number after its title.
@@ -15,30 +15,73 @@ Each item is sized for one agent session. If an item turns out bigger, split it 
 
 Legend: **Needs Jon** = needs a decision, access, or money from Jon before or during the item. IDs are stable; never renumber. Add new items at the end of a phase with the next free number.
 
+## Current order
+
+IDs stay in file order, so the working order lives here. Set 2026-11-22 from the [red-team review](docs/reviews/2026-11-22-red-team.md#proposed-roadmap-order) and Jon's decisions that afternoon (brief 02):
+
+1. **P0.6, P0.7, P0.8, P0.10**: origin lockdown, protect `main` and bot identities, CI, a portable `./verify` and Dependabot, and the KB poisoning defences, including the runtime symlink fix (red-team H4 and M3, JON-1341, PR #8), which feed P1.2.
+2. **P0.9** operations basics.
+3. **P3.7** token through plugin `userConfig` (moved up: new hosts fail silently without it).
+4. **P1.2** widened (parser fixes M3, M4 on top of `jdad lint-kb`), then **P1.3**.
+5. **P2.1**, **P2.4**: grow the KB.
+6. **P1.1**, **P1.6**.
+7. **P1.4**, **P1.5** once there are at least two skills.
+8. **P3.1**, then the rest in file order.
+
+Deferred (Jon, 2026-11-22 3:16 PM ET): **P3.2** semantic search and the droplet RAM increase.
+
 ---
 
-## Phase 0: Foundation (done)
+## Phase 0: Foundation
 
 - [x] **P0.1 Knowledge base seed** (d104c73): `sources/` + `practices/performance.md` from the breakingbreach performance reel.
 - [x] **P0.2 MCP server, HTTP transport, Claude Code plugin** (#1, JON-1330): `jdad-mcp` with 7 read-only tools, `kb://practices/{name}`, `apply-kb` prompt, bearer auth, host allowlist, `/jdad plan|review|perf|add`, `jdad-performance` skill, `./verify`, systemd deploy.
 - [x] **P0.3 Docker deploy merged** (#2, 2022a8a). Acceptance: #2 is merged to `main` (merge commit 2022a8a), and the full `./verify`, including `tests/test_docker.sh`, passes on this roadmap PR's head after it merges `main`. Merging doesn't mean deployed; that is P0.5.
 - [x] **P0.4 Roadmap, vision, research, ADRs** (this PR).
-- [ ] **P0.5 Hosted endpoint deployed and proven** ([ADR 0005](docs/adr/0005-hosted-deploy-cloudflare-full-strict.md))
+- [x] **P0.5 Hosted endpoint deployed and proven** ([ADR 0005](docs/adr/0005-hosted-deploy-cloudflare-full-strict.md); deployed 2026-11-22 2:35 PM ET at c90178b, JON-1330)
   - Acceptance: on the droplet, the running container's `JDAD_GIT_SHA` equals `main`'s head SHA; through `https://jdad-mcp.jondevs.com/mcp` with a valid token, `initialize`, `tools/list` and one `tools/call` return 200; with no token, 401; a request with a non-allowlisted `Host` gets 421 at the origin; `curl` with the Cloudflare Origin CA root as `--cacert` verifies the origin certificate; Cloudflare's SSL mode for the host is Full (strict). Tokens redacted in the PR. When this passes, ADR 0005 moves to Accepted.
   - Depends on: P0.3. **Needs Jon:** droplet access and the Cloudflare Configuration Rule.
+  - Evidence (2026-11-22, 2:35–2:36 PM ET, tokens redacted): container `jdad-jdad-1` healthy, image `jdad:c90178b88e9a6ea761ae7f5fb46c11b09e1469ae`, in-container `JDAD_GIT_SHA` = `main` head c90178b; via `https://jdad-mcp.jondevs.com` (served by Cloudflare): `/healthz` 200 `{"status":"ok"}`, `/mcp` no token 401, wrong token 401, valid token `initialize` 200, `notifications/initialized` 202, `tools/list` 200 (all 7 tools), `tools/call kb_version` 200 (sha c90178b, dirty false); at the origin: `Host: evil.example.com` 421; `curl --cacert origin_ca_rsa_root.pem` against the origin verifies (ssl_verify_result 0); port 80 closed; container `read_only` true, `cap_drop` ALL, `no-new-privileges`, uid 1000:1000. Cloudflare SSL mode for the host is Full (strict), shown by Jon's dashboard screenshots of the Configuration Rule. Raw outputs and a description of the screenshots: [docs/evidence/p0.5](docs/evidence/p0.5/README.md).
+- [ ] **P0.6 Origin lockdown** (red-team H3, JON-1340, PR #7)
+  - Goal: only Cloudflare can reach the origin, so the token isn't the only gate and Cloudflare's edge controls can't be bypassed.
+  - Deliverables: Host allowlist before auth on every path (421 for a foreign Host on `/healthz` too); `deploy/firewall-cloudflare.sh` (`DOCKER-USER` and `INPUT` hooks for TCP 443, Cloudflare ranges only, IPv4 and IPv6, boot unit, refresh, rollback, dry run); README sections on the firewall layers and the origin certificate's SAN exposure.
+  - Acceptance: tests in `./verify` cover the Host check and the firewall (rules, refusals, real iptables in a container). Runtime: on the droplet, from a host outside Cloudflare's ranges, a TCP connect to the origin on 443 times out over IPv4 (and IPv6 if present), while `https://jdad-mcp.jondevs.com/healthz` and an authenticated `tools/call` still return 200, also after a reboot; without that run the item stays open as runtime unverified.
+  - Depends on: P0.5. Decision (Jon, 2026-11-22 3:16 PM ET): the host firewall is approved. Daisy applies it.
+- [ ] **P0.7 Protect `main` and give bots their own identities** (red-team H1, JON-1338, PR #12)
+  - Goal: what reaches `main` (and so the droplet and every plugin install) has been through a PR, CI and someone other than its author.
+  - Deliverables: the pre-public scrub (`docs/reviews/2026-11-22-pre-public-scrub.md`); the phased ruleset and identity plan (`docs/ops/github-protection-plan.md`); CODEOWNERS for KB content.
+  - Acceptance: `gh api repos/JongoDB/jdad/rules/branches/main` shows: PR required, no force push, no deletion, no bypass actors, and (after P0.8) the `verify` check required; a PR opened by a bot identity can't be approved by that identity; `JongoDB` credentials are revoked on every bot host (dates on the card).
+  - Depends on: P0.6 and PR #8 merged (the scrub's gating steps). **Needs Jon:** make the repo public, then apply the ruleset; create the GitHub Apps and the machine user.
+  - Decision (Jon, 2026-11-22 3:16 PM ET): the repo will be public (no proprietary or sensitive data; the KB is not confidential), `main` gets protected after that, and bots get their own GitHub identity.
+- [ ] **P0.8 CI runs, `./verify` is portable, dependencies get updated** (red-team H2, M8 and M10, JON-1339, PRs #9 and #11)
+  - Goal: every PR has an automated pass/fail, and the builder's machine can produce one too.
+  - Deliverables: portable file-mode reads; `DOCKER_CONFIG` kept when the Docker test overrides `HOME`; the async fixture fix; `.python-version`; a skipped `claude plugin validate` fails under `CI`; the workflow installs a pinned Claude Code CLI; **Dependabot (M8)**: `.github/dependabot.yml` for `uv`/pip, GitHub Actions and the Dockerfile's base images, weekly, grouped; `hatchling` pinned in `[build-system]` so the image build doesn't float; Dependabot vulnerability alerts turned on.
+  - Acceptance: `./verify` ends `verify: ok` on macOS (OrbStack) and on Linux, outputs in the PR; a GitHub Actions `verify` run on a PR is green, with its URL on the card; `dependabot.yml` validates against its schema in `./verify`; `gh api repos/JongoDB/jdad/vulnerability-alerts` returns 204; the first Dependabot PR (or its "up to date" run) is linked on the card.
+  - Depends on: P0.7's repo switch (Actions is free once public). **Needs Jon:** the repo switch, or the Actions billing fix approved on 2026-11-22; turning on vulnerability alerts (a repo setting).
+- [ ] **P0.9 Operations basics** (red-team M1, M2, M5, M6, M7, JON-1344)
+  - Goal: the endpoint survives a bad commit, a noisy client and a lost droplet, and someone notices when it's down.
+  - Deliverables: compose `mem_limit`, `pids_limit`, `cpus` and log rotation; `jdad-mcp --check` in the image build and before the swap in `update-docker.sh`; rollback resets the checkout to the previous SHA; NetBird documented as kept stopped; an external uptime check on `/healthz`; `docs/ops/rebuild-runbook.md`; a token rotation runbook.
+  - Acceptance: the Docker suite asserts the limits and log options, refuses a commit that breaks only the KB before the swap (running image unchanged), and shows the checkout back on the previous SHA after a rollback; `jdad-mcp --check` has a failing test for a non-UTF-8 practice, a symlink and an unreadable source. Runtime: one rotation rehearsed on the droplet (old token 401, new token 200); without it the item stays open as runtime unverified.
+  - Depends on: P0.8 (PR #9's token file). Decision (Jon, 2026-11-22 3:16 PM ET): keep the stopped NetBird stack and document it.
+- [ ] **P0.10 KB poisoning defences, including at runtime** (red-team H4 and M3, JON-1341, PR #8)
+  - Goal: text in `practices/` or `sources/` can't steer agents, and the server never serves a file from outside the KB.
+  - Deliverables: `jdad lint-kb` in `./verify` (agent-addressed text, URLs and shell in practices, hidden Unicode, comments, symlinks, non-`.md` files, file size); `get_source` output marked as quoted third-party material; the KB root never taken from the current directory; **the runtime symlink fix (Checker on #8, 0a5b7d0)**: files opened with `O_NOFOLLOW`, and symlinked files and directories, non-regular files, anything resolving outside the KB root, and files over 1 MiB skipped by every tool and resource; `docs/threat-model.md`; draft CODEOWNERS.
+  - Acceptance: `tests/test_lint.py` and `tests/test_kb_files.py` pass in `./verify`, including the `practices/hosts.md -> /etc/hosts` repro (refused by `get_practice`, absent from `list_topics`); `jdad lint-kb` is clean on the repo; the 5 lint bypasses from Checker's verdict on #8 each get a failing fixture (done in #8: `tests/test_lint.py`); a decision recorded on whether the hosted server requires `KB_ROOT` (follow-up).
+  - Depends on: nothing. P1.2 builds on it.
 
 ## Phase 1: One source of truth
 
 Goal: before adding features, make the repo itself cross-tool and give the KB and skills a schema that later phases build on.
 
-- [ ] **P1.1 AGENTS.md becomes the canonical instructions file**
+- [x] **P1.1 AGENTS.md becomes the canonical instructions file**
   - Goal: Codex, Cursor and Grok Build read the full repo rules, not just Claude Code. ([ADR 0004](docs/adr/0004-agents-md-canonical-instructions.md))
   - Deliverables: move the rules from `CLAUDE.md` into `AGENTS.md`; `CLAUDE.md` becomes `@AGENTS.md` plus Claude-only notes (plugin validate, `userConfig`); a test that enforces the sizes below.
   - Acceptance: `AGENTS.md` ≤ 120 lines and < 32 KiB; `CLAUDE.md` ≤ 40 lines and contains `@AGENTS.md`; every normative rule has an ID (`R-<area>-<n>`) listed in a table in `AGENTS.md`, and a test asserts each ID appears in exactly one of `AGENTS.md` or `CLAUDE.md`'s "Claude-only" section; `./verify` passes. Runtime: on one installed CLI, a discovery run lists `AGENTS.md`: either `grok inspect --json` output names it, or `codex -c log_dir=./.codex-log --ask-for-approval never "Show which instruction files are active."` run from the repo root leaves `./.codex-log/codex-tui.log` containing `AGENTS.md` (the audit method in Codex's AGENTS.md guide); without it the item stays open as runtime unverified.
   - Depends on: P0.3 (done; both PRs edit `CLAUDE.md`).
+  - Evidence (2026-11-22, JON-1332): `tests/test_instructions.py` enforces the sizes and one definition per rule ID (26 IDs; 4 Claude-only). `GROK_FOLDER_TRUST=0 grok inspect --json` (Grok 1.0.77, folder-trust gate off for that one process, nothing persisted) lists both `AGENTS.md` (6,419 bytes) and `CLAUDE.md` (946 bytes) under `projectInstructions`.
 - [ ] **P1.2 Practice schema and stable rule IDs**
   - Goal: every rule is addressable, so checklists, reviews and dedupe can cite `perf.db.n-plus-one` instead of a bullet's position.
-  - Deliverables: `docs/kb-schema.md` (rule ID format, required tag, `src:` citation, optional `applies-when`, `origin: source|kb-addition`); migrate `practices/performance.md`; `jdad lint-kb` command (stdlib only) wired into `./verify`; `kb.py` parses IDs.
+  - Deliverables: `docs/kb-schema.md` (rule ID format, required tag, `src:` citation, optional `applies-when`, `origin: source|kb-addition`); migrate `practices/performance.md`; structural checks added to `jdad lint-kb` (the content checks landed with JON-1341, PR #8); `kb.py` parses IDs. Widened by the red-team review: preamble rules such as Rule zero get IDs and appear in checklists, and nested bullets, continuation lines and numbered items are parsed or rejected, never dropped silently (M4); one unreadable file doesn't break the listing tools (M3).
   - Acceptance: lint fails on a rule with no tag, no citation, a duplicate ID or an unknown tag (tests show each failure); all existing MCP tests pass; `search_practices` and `get_checklist` results include rule IDs.
   - Depends on: none.
 - [ ] **P1.3 Source file schema and ingestion contract**
@@ -48,65 +91,76 @@ Goal: before adding features, make the repo itself cross-tool and give the KB an
   - Depends on: P1.2.
   - Prerequisite (before any bot opens KB PRs): branch protection on `main`: a pull request is required before merging (no direct pushes), force pushes and branch deletion are blocked, and the rule applies to admins; the `verify` status check becomes required once GitHub Actions runs again (P5.1). Required approvals wait until reviewers use a separate GitHub account, because today every bot acts as `JongoDB` and a required approval would block every merge. Evidence: `gh api repos/JongoDB/jdad/branches/main/protection` output in the PR. This is a GitHub settings change, not a repo change. **Needs Jon:** apply the branch protection (repo admin). Until then, "nobody merges their own PR" is policy only.
   - Decision (Jon, 2026-11-22 11:35 AM ET): bots, Daisy included, may open KB PRs into `JongoDB/jdad` themselves. The handoff contract assumes that; Checker still reviews and nobody merges their own PR.
-- [ ] **P1.4 Canonical skills catalog**
+- [x] **P1.4 Canonical skills catalog**
   - Goal: one source for every skill, valid under the Agent Skills spec. ([ADR 0001](docs/adr/0001-canonical-skill-format-and-compilers.md))
   - Deliverables: `catalog/skills/<name>/SKILL.md` with spec-only frontmatter (`name`, `description`, `license`, `compatibility`, `metadata`, `allowed-tools`) and tool extras under `metadata` (for example `metadata.claude.disable-model-invocation`); `catalog/rules/<name>.md` for always-on, glob-scoped rules; move `jdad-performance` in; a spec validator (name = directory, lowercase-hyphen, ≤64 chars, description ≤1024 chars, body < 500 lines) in `./verify`.
   - Acceptance: validator tests have one failing fixture per spec rule listed in the deliverables (name = directory, charset, ≤64 chars, description ≤1024 chars, body < 500 lines, unknown top-level frontmatter key); `skills-ref validate` at a pinned version (recorded in the PR) exits 0 on every catalog skill; `claude plugin validate .` exits 0. Runtime: in a temp `HOME`, `claude plugin marketplace add` + `claude plugin install` succeed and the installed manifest lists the catalog skills; without a CLI the item stays open as runtime unverified.
   - Depends on: none.
-- [ ] **P1.5 Skill compiler v0 (`jdad build`)**
+  - Evidence (2026-11-22, JON-1335): `tests/test_catalog.py` (24) has a failing fixture per spec rule; `agentskills validate` from `skills-ref==0.1.1` passes on every catalog skill in `./verify`; `claude plugin validate .` passes; in a temp `HOME`, Claude Code 2.1.330 `plugin marketplace add` + `plugin install jdad@jdad` succeed and `plugin details` lists the `jdad-performance` skill.
+- [x] **P1.5 Skill compiler v0 (`jdad build`)**
   - Goal: generate each tool's files from the catalog so no one hand-edits four copies.
   - Deliverables: `jdad build` writing (a) plugin `skills/` for Claude Code (also read by Grok Build), (b) `dist/agents-skills/` for `.agents/skills/` (Codex, Cursor), (c) Cursor `.mdc` files from `catalog/rules/` (`description`, `globs`, `alwaysApply`); a generated-file header; `jdad build --check` in `./verify` fails when outputs are stale; golden-file tests per target.
   - Acceptance: changing a catalog skill without rebuilding fails `./verify`; golden tests pass; the generated Claude skill matches today's `skills/jdad-performance/SKILL.md` apart from the generated-file header (diff shown in the PR).
   - Depends on: P1.4.
-- [ ] **P1.6 Dogfood the harness in this repo**
+  - Evidence (2026-11-22, JON-1336): `tests/test_build.py` has golden files for all three targets (`skills/`, `generated/agents-skills/`, `generated/cursor-rules/`; outputs live in `generated/` because `uv build` ignores all of `dist/`); editing a catalog skill without rebuilding makes `jdad build --check`, and so `./verify`, fail; the generated `skills/jdad-performance/SKILL.md` equals the catalog source apart from the two-line `metadata.generated` header.
+- [x] **P1.6 Dogfood the harness in this repo**
   - Goal: JDAD runs the same guardrails it will ship.
   - Deliverables: `.claude/settings.json` with deny rules (reading `.env*`, `**/*.pem`, `**/id_*`; `rm -rf`; `git push --force`) and a `Stop` hook that runs a fast verify subset (ruff + pytest -q) and exits 2 on failure; `LESSONS.md` seeded with the lessons from PR #1's six Checker rounds; a `./verify --fast` flag.
   - Acceptance: tests drive the hook and permission fixtures: an allowed read succeeds; reads of `.env`, `x.pem` and `id_ed25519` and the `rm -rf` and `git push --force` fixtures each return deny before execution; a failing pytest fixture makes the Stop hook exit 2 and a passing one exits 0; `./verify --fast` runs ruff and pytest and exits non-zero when either fails; `LESSONS.md` has at least 5 entries, each with a date and a link to the PR or verdict.
   - Depends on: P1.1 (so the hook command is documented in `AGENTS.md`).
+  - Evidence (2026-11-22, JON-1335): `tests/test_harness.py` (54 tests) drives `.claude/hooks/guard.py` and `stop_verify.py` with Claude Code's stdin JSON: allowed reads pass; `.env`, `x.pem`, `id_ed25519`, `rm -rf` and `git push --force` fixtures (plus variants) are denied before execution; a failing pytest fixture makes the Stop hook exit 2, a passing one 0; `./verify --fast` fails when ruff or pytest fails. `LESSONS.md` has 10 dated, linked entries.
 
 ## Phase 2: KB ingestion pipeline
 
 Goal: video or article → source → practice, with dedupe, tags and citations, done the same way every time.
 
-- [ ] **P2.1 Ingestion runbook and `jdad-ingest` skill**
-  - Deliverables: `docs/ingestion.md` (capture → transcript → `sources/` record → fold into `practices/` → dedupe → version bump → PR); `catalog/skills/jdad-ingest/` for Daisy and other agents; `/jdad add` keeps routing to Daisy.
-  - Acceptance: a dry run on one new article produces a source file and practice edits that pass `jdad lint-kb`; the runbook names the exact capture tool for video.
-  - Depends on: P1.3, P1.5. **Needs Jon:** which video transcript tool Daisy uses and where raw transcripts may live (in repo or not).
-- [ ] **P2.2 Duplicate and near-duplicate detection**
+- [x] **P2.1 Ingestion runbook and `jdad-ingest` skill**
+  - Deliverables: `docs/ingestion.md` runbook (Jon's link → Daisy watches or reads it → extract tools, resources and practices → `sources/` record with the link and items → fold into `practices/` → dedupe → version bump → PR); `catalog/skills/jdad-ingest/` for Daisy and other agents; `/jdad add` keeps routing to Daisy.
+  - Acceptance: a dry run on one new article produces a source file and practice edits that pass `jdad lint-kb`; no transcript is stored anywhere.
+  - Depends on: P1.3, P1.5. Jon decided (2026-11-22): no transcript pipeline or transcripts repo; source records (link plus extracted items, with paraphrase, short quotes and timestamps) are public; Claude session transcripts and agent logs never go in the repo.
+  - Evidence (2026-11-22, JON-1349): the runbook is in `docs/ingestion.md` (10 steps with their commands); `catalog/skills/jdad-ingest/` writes nothing outside a JDAD checkout; dry run on Anthropic's "Writing effective tools for agents": `sources/2026-11-22-anthropic-tools-...md` (24 items) and a new `practices/agent-tools.md` (19 rules, skill `jdad-agent-tools`), `jdad lint-kb` ok; no transcript stored; `tests/test_ingest.py`.
+- [x] **P2.2 Duplicate and near-duplicate detection**
   - Deliverables: `jdad kb dupes` (offline token-overlap or TF-IDF similarity over rule text, stdlib only) listing candidate pairs above a threshold; a non-blocking report in `./verify` output.
   - Acceptance: a committed fixture file labels pairs as duplicate, paraphrase or distinct, and the PR records the cutoff θ; at θ, every exact-duplicate pair is reported, paraphrase recall ≥ 0.8, and no pair in the current KB labeled distinct is reported; the score output is in the PR.
   - Depends on: P1.2.
-- [ ] **P2.3 Tag taxonomy v2**
+  - Evidence (2026-11-23, JON-1362): `jdad kb dupes` (TF-IDF cosine over the search tokenizer, stdlib only; texts equal once case, spacing and punctuation are ignored score 1.0), printed by `./verify` with `|| true`. θ = 0.6, from `tests/fixtures/dupes/pairs.json` (written before scoring): 6/6 duplicates at 1.0, paraphrase recall 13/15 = 0.87, highest distinct pair 0.580; 10 high-scoring KB pairs, labeled distinct by hand (the top 8 on main ef7ebf2 plus the 2 new top-8 pairs after #33, 112 rules), top out at 0.431. `tests/test_dupes.py` asserts each, plus a hand-computed score, rounding before θ and the ID tie-break (JON-1363, 2026-11-24).
+- [x] **P2.3 Tag taxonomy v2**
   - Deliverables: add tags for `security`, `supply-chain`, `ci`, `process` (agent workflow), `design` (API and architecture), `ux`; document each in `docs/kb-schema.md`; `get_checklist` and the `/jdad` command accept them.
   - Acceptance: lint and `get_checklist` tests are parametrized over all six new tags; each tag returns its seeded rule ID and excludes rules with other tags; an unknown tag fails lint with the tag name in the error.
-  - Depends on: P1.2. **Needs Jon:** approve the tag list.
-- [ ] **P2.4 Ingest the harness research as KB sources**
+  - Depends on: P1.2. **Needs Jon:** approve the tag list. Approved as is, 2026-11-22.
+  - Evidence (2026-11-22, JON-1347): `tests/test_tags.py` is parametrized over the six tags: each lints clean, and `get_checklist([tag])` on `tests/fixtures/tags/` returns exactly its seeded rule ID; five misspelled tags fail lint with the tag named; README, `/jdad`, the schema doc, CLAUDE.md and the server strings list all twelve.
+- [x] **P2.4 Ingest the harness research as KB sources**
   - Goal: the agent-workflow opinions in VISION.md become cited KB rules, not just prose.
   - Deliverables: `sources/` records for OpenAI "Harness engineering", Anthropic's long-running harness and harness-design posts, and Claude Code best practices (see `docs/research/`); `practices/agentic-workflow.md` tagged `[process]`; `catalog/skills/jdad-workflow/`.
   - Acceptance: every rule cites one of those sources or is labeled a KB addition; `get_checklist(["process"])` returns them.
   - Depends on: P1.3, P2.3.
-- [ ] **P2.5 Citation integrity and source freshness**
+  - Progress (2026-11-22, JON-1348): four `sources/` records, `practices/agentic-workflow.md` (61 rules, every section `[process]`, every rule cites one of the four), `skills/jdad-workflow/` as a hand copy; `tests/test_workflow_kb.py`. Done when the stacks met: `catalog/skills/jdad-workflow/` is the canonical copy and `jdad build` generates `skills/jdad-workflow/`.
+- [x] **P2.5 Citation integrity and source freshness**
   - Deliverables: lint that every `src:` resolves to a source and item; a report of sources older than 12 months whose topic has newer sources.
   - Acceptance: with the date frozen in tests: source A older than 365 days plus a same-topic source B newer than A produces an A→B line in the report; a source with no newer same-topic peer isn't reported; a `src:` to a missing source or item number makes lint exit non-zero and names the citation.
   - Depends on: P1.3.
+  - Evidence (2026-11-22, JON-1350): `tests/test_freshness.py` with the date frozen: an A->B line for an old source with a newer same-topic peer; none without a peer, at exactly 365 days, or for an uncited source; `posted: unknown` falls back to `retrieved`; `jdad lint-kb` exits 1 and quotes the citation for an unknown source or an item out of range. `jdad freshness` is a report (exit 0; `--strict` exits 1), not a `./verify` gate.
 
 ## Phase 3: MCP server v2
 
 Goal: richer, still read-only and offline tools. ([ADR 0003](docs/adr/0003-stdio-plus-hosted-http-mcp.md))
 
-- [ ] **P3.1 Ranked lexical search**
+- [x] **P3.1 Ranked lexical search**
   - Deliverables: BM25 (stdlib) over rules; `search_practices(query, tags?, limit=10)` returns rule ID, topic, heading, snippet, score; a `concise|detailed` response format per Anthropic's tool-writing guidance.
   - Acceptance: a fixture KB and expected top-3 rule IDs for 10 queries are committed; tests assert those IDs in order; with `limit=10` and `concise`, the UTF-8 response is ≤ 2048 bytes.
   - Depends on: P1.2.
+  - Evidence (2026-11-22, JON-1346): `tests/fixtures/search/` (21 rules) and `queries.json` (10 queries, expected top-3 IDs in order); `tests/test_search.py` asserts them; with `limit=10` and `concise`, the UTF-8 JSON response is within 2048 bytes on the fixture and on the repo KB.
 - [ ] **P3.2 Optional semantic search**
   - Deliverables: `jdad[semantic]` extra with a small local embedding model; index built at deploy or update time, not per request; `search_practices(mode="semantic")` falls back to lexical when the extra isn't installed.
   - Acceptance: server starts and the full suite passes without the extra; with it, on ≥ 20 committed, labeled paraphrase queries, semantic recall@5 ≥ lexical recall@5 + 0.10; peak RSS under a fixed 100-request workload is recorded in the PR and is ≤ the memory budget Jon approves on the card.
   - Depends on: P3.1. **Needs Jon:** the droplet's new RAM size and the memory budget for the acceptance check. Both stay open until Jon regains DigitalOcean console access (support ticket open).
   - Decision (Jon, 2026-11-22 11:35 AM ET): semantic search and its dependency are approved, and the droplet's RAM will be increased.
-- [ ] **P3.3 Checklists v2**
+  - Decision (Jon, 2026-11-22 3:16 PM ET): **deferred**, together with the RAM increase. Revisit when the KB is large enough that P3.1's lexical search measurably misses paraphrases.
+- [x] **P3.3 Checklists v2**
   - Deliverables: `get_checklist(tags, phase="plan|review|ship")` returns Markdown checkboxes with rule IDs and citations; `kb://checklists/{tag}` resources.
   - Acceptance: for each of `plan`, `review` and `ship`, tests assert the rule IDs selected for a fixture tag set, that every line matches `- [ ] <rule-id>: <text> (<citation URL>)`, and that `kb://checklists/{tag}` equals `get_checklist([tag])`; tests on the command files assert `/jdad plan` and `/jdad review` instruct the agent to cite rule IDs.
   - Depends on: P1.2.
+  - Evidence (2026-11-23, JON-1364): rules take an optional `Phase: plan, review` line (no line = every phase; Daisy's decision); `get_checklist(tags, phase)` returns `- [ ] <id>: <text> (<source URL> | KB addition)`; `kb://checklists/{tag}` equals `get_checklist([tag])`. `tests/test_checklists.py` (23): per-phase rule IDs on `tests/fixtures/checklists/`, every item line on the fixture and the repo KB matches the format, the resource equals the tool for all twelve tags, the tool forwards `phase`, the lint rejects bad `Phase:` lines, and `/jdad plan` and `review` ask for their phase and rule IDs. 15 mutants killed. Proposed labels on the real KB (2026-11-24, for Jon to override): 111 of 112 rules, plan 54, review 56, ship 22; Rule zero stays unmarked (every phase). Follow-ups (2026-11-24, JON-1363): citations keep their item numbers (`(<source URL> #n)`), and tests pin the served text, the tool's phase enum and `apply-kb`'s plan phase.
 - [ ] **P3.4 `review_against_kb` tool and prompt**
   - Deliverables: `review_against_kb(changed_files: list[str], summary: str, tags?: list[str])` returns the applicable rules (inferred from file types and tags), a review rubric (correctness first, "skip style"), and a required findings format (rule ID, file, evidence, severity). The server does no model calls; the calling agent does the review. A matching `review-against-kb` prompt.
   - Acceptance: tests show tag inference for frontend, backend, db and infra file sets; output contains only rules whose tags match; a test on `commands/jdad.md` asserts the `review` section tells the agent to call `review_against_kb` and to report findings in its rule-ID / file / evidence / severity format.
@@ -119,10 +173,11 @@ Goal: richer, still read-only and offline tools. ([ADR 0003](docs/adr/0003-stdio
   - Deliverables: track the Python SDK's support for the stateless revision (`server/discover`, no `initialize`); upgrade when released; a 10-task tool-use eval (agent asked KB questions; graded on correct tool and rule ID).
   - Acceptance: `docs/research/open-standards.md` has a matrix row per pinned SDK version with pass/fail for `initialize` and `server/discover`; the server doesn't switch protocol revisions while any target client row fails; 10 labeled KB tasks are committed, and the eval shows ≥ 9 correct tool choices and ≥ 9 correct rule IDs.
   - Depends on: P3.1.
-- [ ] **P3.7 Token UX via plugin `userConfig`**
+- [x] **P3.7 Token UX via plugin `userConfig`**
   - Deliverables: Claude plugin `userConfig.jdad_token` with `sensitive: true`, used in the MCP header; README update; env-var path kept as fallback.
   - Acceptance: `claude plugin validate .` exits 0. Runtime: with an ephemeral, local-only test token (generated for the run, never a real JDAD token), a local server shows 200 for the prompted token and 401 for a missing or wrong token; the PR shows a transcript with the token redacted; `grep` for the token value over server logs and the PR body finds nothing; the test token is then destroyed. Without a Claude CLI the item stays open as runtime unverified.
   - Depends on: P0.3.
+  - Evidence (2026-11-24, JON-1345, PR #15, approved by Jon 10:12 AM ET): `userConfig.jdad_token` (`sensitive: true`) and `.mcp.json` sending `Bearer ${user_config.jdad_token}`; `claude plugin validate .` passes. `tests/test_plugin_userconfig_runtime.sh` (opt-in, throwaway containers, ephemeral token) on Claude Code 2.1.330 and 2.1.331: unset and wrong tokens get 401, the configured token 200, the value isn't in `settings.json`, the server logs or the output. The env-var fallback can't live in the plugin (`${user_config.x:-${VAR}}` fails to load), so it's a documented user-scope `jdad-env` entry, also tested. Breaking for plugin users who relied on `JDAD_TOKEN`: version 0.8.0.
 
 ## Phase 4: Harness templates and `jdad init`
 
@@ -175,9 +230,9 @@ Goal: the verify/CI, security, observability and performance opinions as KB rule
   - Acceptance: a fixture config sets limits for bundle bytes, a Lighthouse score and p95 latency; for each, a below-limit fixture passes and an above-limit fixture fails with measured vs target in the output; overriding the limit in the repo config flips the result; rules cited or labeled.
   - Depends on: P5.1.
 - [ ] **P5.6 Edge protection for the hosted MCP endpoint**
-  - Deliverables: rate limiting and WAF rules (Cloudflare) or an app-level limiter for `jdad-mcp.jondevs.com`; a token-rotation runbook. PR #2's Unverified list defers this: "Rate limiting / WAF is deferred for this release (already covered as P5.6 in the roadmap PR)."
-  - Acceptance: with a test token and a test hostname or a staging rule (no flood against production): after N requests in the configured window the endpoint returns 429 with `Retry-After`, and returns 200 again after the window; N and the window are in the runbook. Rotation: after following the runbook once, the old token gets 401 and the new token gets 200; tokens are redacted in the PR.
-  - Depends on: P0.5. **Needs Jon:** Cloudflare dashboard changes.
+  - Deliverables: rate limiting and WAF rules (Cloudflare) or an app-level limiter for `jdad-mcp.jondevs.com`. PR #2's Unverified list defers this: "Rate limiting / WAF is deferred for this release (already covered as P5.6 in the roadmap PR)." The token-rotation runbook moved to P0.9, and this item comes after P0.6, since edge limits mean little while the origin is reachable directly.
+  - Acceptance: with a test token and a test hostname or a staging rule (no flood against production): after N requests in the configured window the endpoint returns 429 with `Retry-After`, and returns 200 again after the window; N and the window are in the runbook.
+  - Depends on: P0.5, P0.6. **Needs Jon:** Cloudflare dashboard changes.
 
 ## Phase 6: Evals
 

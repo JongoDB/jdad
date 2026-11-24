@@ -5,14 +5,23 @@
 # rollback from a deliberately broken commit), and cleanup.
 #
 # Isolation: everything runs under a unique compose project
-# (jdad-test-<pid>), a unique image repo with the same name, and an
-# ephemeral loopback port, so it cannot stop the production project
-# "jdad", take port 443, or delete its rollback image. It refuses to run
+# (jdad-test-<time>-<pid>-<random>), a unique image repo with the same
+# name, and an ephemeral loopback port, so it cannot stop the production
+# project "jdad", take port 443, or delete its rollback image. The time and
+# random parts matter: two runs in different PID namespaces (containers,
+# CI runners) on one daemon can have the same PID, and their cleanups
+# would then remove each other's containers and images. It refuses to run
 # at all if a compose project named "jdad" exists on this daemon.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
+
+# This script later points HOME at a scratch directory. Docker finds its CLI
+# plugins (compose, on OrbStack and Docker Desktop) and the active context
+# through ~/.docker, so pin DOCKER_CONFIG to the real one first; otherwise
+# `docker compose` vanishes ("unknown shorthand flag: 'f' in -f").
+export DOCKER_CONFIG="${DOCKER_CONFIG:-$HOME/.docker}"
 
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
   echo "skip docker image tests: docker is not available on this box"
@@ -26,7 +35,7 @@ if [[ -n "$(docker ps -a -q --filter label=com.docker.compose.project=jdad)" ]];
 fi
 
 SHA="$(git -C "$ROOT" rev-parse HEAD)"
-TAG_ID="jdad-test-$$"
+TAG_ID="jdad-test-$(date +%s)-$$-$(printf '%04x%04x' "$RANDOM" "$RANDOM")"
 PROJECT="$TAG_ID"
 IMG="$TAG_ID"
 CANARY_IMG="$TAG_ID-canary"
@@ -51,7 +60,7 @@ cleanup() {
     HOME="$TESTHOME" JDAD_GIT_SHA="$SHA" JDAD_UID="$(id -u)" JDAD_GID="$(id -g)" \
       "${COMPOSE[@]}" down --remove-orphans >/dev/null 2>&1 || true
   fi
-  docker rm -f "$TAG_ID-token-quote" "$TAG_ID-canary-ctr" >/dev/null 2>&1 || true
+  docker rm -f "$TAG_ID-token-quote" "$TAG_ID-canary-ctr" "$TAG_ID-legacy-probe" >/dev/null 2>&1 || true
   local refs
   refs="$(docker image ls --format '{{.Repository}}:{{.Tag}}' | grep -E "^($IMG|$CANARY_IMG):" || true)"
   if [[ -n "$refs" ]]; then
@@ -66,12 +75,11 @@ trap cleanup EXIT
 
 mkdir -p "$TESTHOME/.config/jdad/tls"
 
-{
-  printf 'JDAD_TOKEN='
-  openssl rand -hex 32
-  printf 'JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com\n'
-} > "$TESTHOME/.config/jdad/jdad.env"
+printf 'JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com\n' > "$TESTHOME/.config/jdad/jdad.env"
 chmod 600 "$TESTHOME/.config/jdad/jdad.env"
+# The token lives in its own 0400 file, mounted as a compose secret.
+(umask 077 && openssl rand -hex 32 > "$TESTHOME/.config/jdad/token")
+chmod 400 "$TESTHOME/.config/jdad/token"
 
 # Placeholder files so `compose config` can resolve the volume; replaced
 # with a real self-signed cert before `up`.
@@ -126,6 +134,18 @@ if not any(str(p.get("published")) == "443" and p.get("target") == 8443 for p in
 if svc.get("image") != f"jdad:{sys.argv[2]}":
     sys.exit(f"FAIL default image is {svc.get('image')!r}")
 print("ok defaults: publishes 443:8443 and tags jdad:<sha>")
+mem = svc.get("mem_limit")
+if str(mem) not in {"512m", str(512 * 1024 * 1024)}:
+    sys.exit(f"FAIL mem_limit is {mem!r}, expected 512m")
+if svc.get("pids_limit") != 256:
+    sys.exit(f"FAIL pids_limit is {svc.get('pids_limit')!r}, expected 256")
+if float(svc.get("cpus") or 0) != 1.0:
+    sys.exit(f"FAIL cpus is {svc.get('cpus')!r}, expected 1.0")
+log = svc.get("logging") or {}
+opts = log.get("options") or {}
+if log.get("driver") != "json-file" or opts.get("max-size") != "10m" or str(opts.get("max-file")) != "3":
+    sys.exit(f"FAIL logging is {log!r}, expected json-file with max-size 10m, max-file 3")
+print("ok limits: mem 512m, pids 256, cpus 1.0, json-file logs rotated at 10m x 3")
 PY
 
 # --- canary: stray env/key under src/ and practices/ must not be in the image
@@ -184,7 +204,8 @@ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
   -days 1 -nodes \
   -keyout "$TESTHOME/.config/jdad/tls/origin.key" \
   -out "$TESTHOME/.config/jdad/tls/origin.crt" \
-  -subj "/CN=jdad-mcp.jondevs.com" >/dev/null 2>&1
+  -subj "/CN=jdad-mcp.jondevs.com" \
+  -addext "subjectAltName=DNS:jdad-mcp.jondevs.com" >/dev/null 2>&1
 chmod 600 "$TESTHOME/.config/jdad/tls/origin.key"
 chmod 644 "$TESTHOME/.config/jdad/tls/origin.crt"
 
@@ -239,7 +260,7 @@ fi
 echo "ok https /healthz 200"
 
 init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"jdad-docker-tests","version":"0"}}}'
-token="$(python3 -c 'from pathlib import Path; t=Path("'"$TESTHOME"'/.config/jdad/jdad.env").read_text(); print([l.split("=",1)[1].strip() for l in t.splitlines() if l.startswith("JDAD_TOKEN=")][0])')"
+token="$(tr -d '[:space:]' < "$TESTHOME/.config/jdad/token")"
 hdrs=(-H 'Accept: application/json, text/event-stream' -H 'Content-Type: application/json')
 
 unauth="$(curl -sSk -o /dev/null -w '%{http_code}' -X POST "$BASE/mcp" "${hdrs[@]}" --data "$init")"
@@ -266,6 +287,33 @@ if [[ "$badhost" != 421 ]]; then
   exit 1
 fi
 echo "ok https /mcp 421 with unlisted Host"
+
+# --- the token is a mounted file, not in the container environment
+cid="$("${COMPOSE[@]}" ps -q jdad)"
+if ! docker inspect -f '{{json .Config.Env}}' "$cid" | TOKEN="$token" python3 -c '
+import json, os, sys
+env = json.load(sys.stdin)
+token = os.environ["TOKEN"]
+if any(token in item for item in env):
+    sys.exit("FAIL the token value is in the container environment (docker inspect)")
+if "JDAD_TOKEN_FILE=/run/secrets/jdad_token" not in env:
+    sys.exit("FAIL JDAD_TOKEN_FILE is not set to the mounted secret")
+if any(item.startswith("JDAD_TOKEN=") for item in env):
+    sys.exit("FAIL JDAD_TOKEN is still set in the container environment")
+'; then
+  exit 1
+fi
+if docker inspect "$cid" | grep -qF "$token"; then
+  echo "FAIL the token value appears somewhere in docker inspect output" >&2
+  exit 1
+fi
+echo "ok docker inspect shows JDAD_TOKEN_FILE, not the token"
+limits="$(docker inspect -f '{{.HostConfig.Memory}} {{.HostConfig.PidsLimit}} {{.HostConfig.NanoCpus}} {{.HostConfig.LogConfig.Type}} {{index .HostConfig.LogConfig.Config "max-size"}} {{index .HostConfig.LogConfig.Config "max-file"}}' "$cid")"
+if [[ "$limits" != "536870912 256 1000000000 json-file 10m 3" ]]; then
+  echo "FAIL running container limits are '$limits'" >&2
+  exit 1
+fi
+echo "ok the running container has the memory, pids, cpu and log limits"
 
 # kb_version SHA is the baked git SHA
 check_kb_sha() {
@@ -394,8 +442,99 @@ if [[ "$(running_image)" != "$IMG:$GOOD" ]]; then
 fi
 echo "ok precheck refuses JDAD_UID=0 and leaves the service alone"
 
-# --- real rollback: a broken commit, the real health URL (no override)
-printf '\nraise SystemExit("deliberately broken build for the rollback test")\n' >> "$CLONE/src/jdad/server.py"
+# expect_refusal LABEL PATTERN: run_update must fail with PATTERN and leave
+# the running image alone.
+expect_refusal() {
+  local label="$1" pattern="$2"
+  if run_update > "$WORKDIR/refuse.log" 2>&1; then
+    echo "FAIL update-docker.sh accepted $label" >&2
+    exit 1
+  fi
+  grep -q "$pattern" "$WORKDIR/refuse.log" || { cat "$WORKDIR/refuse.log" >&2; echo "FAIL no '$pattern' message for $label" >&2; exit 1; }
+  if [[ "$(running_image)" != "$IMG:$GOOD" ]]; then
+    echo "FAIL a refused precheck ($label) changed the running image" >&2
+    exit 1
+  fi
+  echo "ok precheck refuses $label and leaves the service alone"
+}
+CONF="$TESTHOME/.config/jdad"
+
+printf 'JDAD_TOKEN=old-style\n' >> "$CONF/jdad.env"
+expect_refusal "an env file that still sets JDAD_TOKEN" "migrate-token.sh"
+printf 'JDAD_ALLOWED_HOSTS=jdad-mcp.jondevs.com\n' > "$CONF/jdad.env"
+
+chmod 440 "$CONF/token"
+expect_refusal "a group-readable token file" "readable by group or others"
+chmod 400 "$CONF/token"
+
+mv "$CONF/token" "$CONF/token.hold"
+expect_refusal "a missing token file" "token file .* is missing"
+mv "$CONF/token.hold" "$CONF/token"
+
+chmod 640 "$CONF/tls/origin.key"
+expect_refusal "a group-readable origin key" "readable by group or others"
+chmod 600 "$CONF/tls/origin.key"
+
+# --- the health probe verifies the certificate: a name the certificate
+# doesn't cover fails the update (and the rollback, which uses the same
+# certificate) instead of passing with curl -k.
+if JDAD_HEALTH_HOST=not-covered.example run_update > "$WORKDIR/certname.log" 2>&1; then
+  echo "FAIL update-docker.sh passed a health check for a name the certificate doesn't cover" >&2
+  cat "$WORKDIR/certname.log" >&2
+  exit 1
+fi
+grep -qi "subject name\|does not match\|certificate" "$WORKDIR/certname.log" \
+  || { cat "$WORKDIR/certname.log" >&2; echo "FAIL no certificate error in the update log" >&2; exit 1; }
+echo "ok the health probe verifies the origin certificate for the public name (no -k)"
+# That failure recorded the SHA; once the cause is fixed, a retry needs the
+# explicit override, and a successful deploy clears the record.
+if run_update > "$WORKDIR/recover.log" 2>&1; then
+  echo "FAIL a recorded failed SHA was redeployed without JDAD_RETRY_FAILED=1" >&2
+  exit 1
+fi
+grep -q "failed its health check on an earlier run" "$WORKDIR/recover.log" \
+  || { cat "$WORKDIR/recover.log" >&2; echo "FAIL no 'earlier run' refusal" >&2; exit 1; }
+if ! JDAD_RETRY_FAILED=1 run_update > "$WORKDIR/recover.log" 2>&1; then
+  echo "FAIL update-docker.sh did not recover with JDAD_RETRY_FAILED=1 and the right health host" >&2
+  cat "$WORKDIR/recover.log" >&2
+  exit 1
+fi
+if [[ -e "$TESTHOME/.config/jdad/failed-sha" ]]; then
+  echo "FAIL a successful deploy left the failed-sha record" >&2
+  exit 1
+fi
+echo "ok a recorded failed SHA needs JDAD_RETRY_FAILED=1, and success clears the record"
+
+# --- a commit that breaks only the KB fails the build (jdad-mcp --check)
+# and never replaces the running container.
+printf '# Bad\n\xff\xfe\n' > "$CLONE/practices/broken.md"
+git -C "$CLONE" add practices/broken.md
+git -C "$CLONE" -c user.name=jdad-test -c user.email=jdad-test@example.invalid \
+  commit -q -m "test: KB file that is not UTF-8"
+if run_update > "$WORKDIR/kbbreak.log" 2>&1; then
+  echo "FAIL update-docker.sh deployed a commit whose KB doesn't load" >&2
+  cat "$WORKDIR/kbbreak.log" >&2
+  exit 1
+fi
+grep -q "practices/broken.md: not valid UTF-8" "$WORKDIR/kbbreak.log" \
+  || { cat "$WORKDIR/kbbreak.log" >&2; echo "FAIL jdad-mcp --check did not name the broken file" >&2; exit 1; }
+grep -q "the running container was not touched" "$WORKDIR/kbbreak.log" \
+  || { cat "$WORKDIR/kbbreak.log" >&2; echo "FAIL no 'not touched' message" >&2; exit 1; }
+if [[ "$(running_image)" != "$IMG:$GOOD" ]]; then
+  echo "FAIL a KB-only break changed the running image to $(running_image)" >&2
+  exit 1
+fi
+git -C "$CLONE" reset -q --hard "$GOOD"
+echo "ok a commit that breaks only the KB fails the build and leaves the running container alone"
+
+# --- real rollback: a commit that builds (and passes --check) but whose
+# HTTP server can't start, probed through the real health URL (no override)
+cat >> "$CLONE/src/jdad/server.py" <<'PY'
+
+
+def create_http_app(token=None):  # noqa: F811 - deliberately broken for the rollback test
+    raise SystemExit("deliberately broken HTTP app for the rollback test")
+PY
 git -C "$CLONE" -c user.name=jdad-test -c user.email=jdad-test@example.invalid \
   commit -q -am "test: deliberately broken"
 BROKEN="$(git -C "$CLONE" rev-parse HEAD)"
@@ -405,12 +544,12 @@ if run_update > "$WORKDIR/rollback.log" 2>&1; then
   cat "$WORKDIR/rollback.log" >&2
   exit 1
 fi
-if ! grep -q "rolled back to $IMG:$GOOD and https://127.0.0.1:[0-9]*/healthz is ok" "$WORKDIR/rollback.log"; then
+if ! grep -q "rolled back to $IMG:$GOOD and https://jdad-mcp.jondevs.com:[0-9]*/healthz (via 127.0.0.1) is ok" "$WORKDIR/rollback.log"; then
   echo "FAIL rollback did not report a healthy rollback to $IMG:$GOOD" >&2
   cat "$WORKDIR/rollback.log" >&2
   exit 1
 fi
-if grep -q '127\.0\.0\.1:/healthz' "$WORKDIR/rollback.log"; then
+if grep -q 'jondevs\.com:/healthz' "$WORKDIR/rollback.log"; then
   echo "FAIL update-docker.sh built a health URL with no port (would probe 443)" >&2
   exit 1
 fi
@@ -425,3 +564,113 @@ fi
 wait_healthy || { echo "FAIL service not healthy after rollback" >&2; exit 1; }
 check_kb_sha "$(base_url)" "$GOOD"
 echo "ok update-docker.sh rolls back a broken commit to $IMG:$GOOD"
+
+if [[ "$(git -C "$CLONE" rev-parse HEAD)" != "$GOOD" ]]; then
+  echo "FAIL after rollback the checkout is at $(git -C "$CLONE" rev-parse HEAD), expected $GOOD" >&2
+  exit 1
+fi
+if [[ "$(head -n1 "$TESTHOME/.config/jdad/failed-sha" 2>/dev/null)" != "$BROKEN" ]]; then
+  echo "FAIL the failed SHA was not recorded" >&2
+  exit 1
+fi
+echo "ok after rollback the checkout is back on $GOOD and $BROKEN is recorded as failed"
+
+# The next run must not rebuild the same broken commit.
+git -C "$CLONE" reset -q --hard "$BROKEN"
+if run_update > "$WORKDIR/again.log" 2>&1; then
+  echo "FAIL update-docker.sh redeployed a commit that already failed" >&2
+  exit 1
+fi
+grep -q "failed its health check on an earlier run" "$WORKDIR/again.log" \
+  || { cat "$WORKDIR/again.log" >&2; echo "FAIL no 'earlier run' refusal" >&2; exit 1; }
+if [[ "$(running_image)" != "$IMG:$GOOD" ]]; then
+  echo "FAIL the refusal changed the running image" >&2
+  exit 1
+fi
+echo "ok a SHA that failed before is refused on the next run"
+
+# --- rollback to an image from before the token file (Checker, PR #9).
+# Those images read only JDAD_TOKEN, so with docker-compose.yml alone a
+# rollback to one refuses to start. update-docker.sh must notice (no
+# io.jdad.token-file label) and pass the token from the file.
+# Default: a stand-in derived from the good image that ignores
+# JDAD_TOKEN_FILE and has no label value. JDAD_TEST_LEGACY_REF=<git ref>
+# builds the real image from that commit instead (e.g. origin/main before
+# the token file landed).
+if [[ -n "${JDAD_TEST_LEGACY_REF:-}" ]]; then
+  LEGACY_SHA="$(git -C "$ROOT" rev-parse "${JDAD_TEST_LEGACY_REF}^{commit}")"
+  mkdir -p "$WORKDIR/legacy"
+  git -C "$ROOT" archive "$LEGACY_SHA" | tar -xf - -C "$WORKDIR/legacy"
+  docker build -q -t "$IMG:$LEGACY_SHA" --build-arg JDAD_GIT_SHA="$LEGACY_SHA" "$WORKDIR/legacy" >/dev/null
+  LEGACY_KB_SHA="$LEGACY_SHA"
+  legacy_kind="real image from $JDAD_TEST_LEGACY_REF"
+else
+  LEGACY_SHA="1111111111111111111111111111111111111111"
+  mkdir -p "$WORKDIR/legacy"
+  printf 'FROM %s\nLABEL io.jdad.token-file=""\nENTRYPOINT ["env", "-u", "JDAD_TOKEN_FILE"]\n' "$IMG:$GOOD" \
+    > "$WORKDIR/legacy/Dockerfile"
+  docker build -q -t "$IMG:$LEGACY_SHA" "$WORKDIR/legacy" >/dev/null
+  LEGACY_KB_SHA="$GOOD"
+  legacy_kind="stand-in that reads only JDAD_TOKEN"
+fi
+
+# The stand-in (or real image) really can't start from the token file alone.
+docker rm -f "$TAG_ID-legacy-probe" >/dev/null 2>&1 || true
+docker run -d --name "$TAG_ID-legacy-probe" -e JDAD_TOKEN_FILE=/run/secrets/jdad_token \
+  "$IMG:$LEGACY_SHA" jdad-mcp --http --host 0.0.0.0 --port 8443 >/dev/null
+sleep 3
+probe_state="$(docker inspect -f '{{.State.Running}} {{.State.ExitCode}}' "$TAG_ID-legacy-probe")"
+docker rm -f "$TAG_ID-legacy-probe" >/dev/null 2>&1 || true
+if [[ "$probe_state" == "true "* || "$probe_state" == "false 0" ]]; then
+  echo "FAIL the legacy image started without JDAD_TOKEN ($probe_state); the test models nothing" >&2
+  exit 1
+fi
+
+# Make it the running deploy, the way update-docker.sh would roll back to it.
+JDAD_TOKEN="$(<"$TESTHOME/.config/jdad/token")" JDAD_GIT_SHA="$LEGACY_SHA" \
+  "${COMPOSE[@]}" -f "$ROOT/deploy/compose.legacy-token.yml" up -d --no-build --force-recreate >/dev/null 2>&1
+wait_healthy || { "${COMPOSE[@]}" logs >&2 || true; echo "FAIL legacy image not healthy with the override" >&2; exit 1; }
+
+# The clone's HEAD is still the broken commit (already marked failed, so
+# JDAD_RETRY_FAILED=1): the update fails and must roll back to the legacy
+# image and come up healthy.
+if JDAD_RETRY_FAILED=1 run_update > "$WORKDIR/legacy-rollback.log" 2>&1; then
+  echo "FAIL update-docker.sh reported success for a broken commit" >&2
+  cat "$WORKDIR/legacy-rollback.log" >&2
+  exit 1
+fi
+grep -q "predates the token file" "$WORKDIR/legacy-rollback.log" \
+  && grep -q "rolled back to $IMG:$LEGACY_SHA and .* is ok" "$WORKDIR/legacy-rollback.log" \
+  || { cat "$WORKDIR/legacy-rollback.log" >&2; echo "FAIL no healthy legacy rollback in the log" >&2; exit 1; }
+if [[ "$(running_image)" != "$IMG:$LEGACY_SHA" ]]; then
+  echo "FAIL after the legacy rollback, running image is $(running_image)" >&2
+  exit 1
+fi
+wait_healthy || { echo "FAIL service not healthy after the legacy rollback" >&2; exit 1; }
+check_kb_sha "$(base_url)" "$LEGACY_KB_SHA"   # authenticated call with the file's token
+# The checkout must stay put: the legacy commit's own update-docker.sh would
+# refuse the migrated env file before it could pull anything.
+if [[ "$(git -C "$CLONE" rev-parse HEAD)" != "$BROKEN" ]]; then
+  echo "FAIL a legacy rollback moved the checkout to $(git -C "$CLONE" rev-parse HEAD)" >&2
+  exit 1
+fi
+grep -q "leaving the checkout on" "$WORKDIR/legacy-rollback.log" \
+  || { cat "$WORKDIR/legacy-rollback.log" >&2; echo "FAIL no 'leaving the checkout' note" >&2; exit 1; }
+if grep -qF "$(<"$TESTHOME/.config/jdad/token")" "$WORKDIR/legacy-rollback.log"; then
+  echo "FAIL the token value appears in the update log" >&2
+  exit 1
+fi
+
+# The next good deploy drops the override: no JDAD_TOKEN in the environment.
+git -C "$CLONE" reset -q --hard "$GOOD"   # scratch clone only
+if ! run_update > "$WORKDIR/legacy-forward.log" 2>&1; then
+  cat "$WORKDIR/legacy-forward.log" >&2
+  echo "FAIL update-docker.sh did not deploy the good commit after a legacy rollback" >&2
+  exit 1
+fi
+[[ "$(running_image)" == "$IMG:$GOOD" ]] || { echo "FAIL running $(running_image), expected $IMG:$GOOD" >&2; exit 1; }
+if docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' "$("${COMPOSE[@]}" ps -q jdad)" | grep -q '^JDAD_TOKEN='; then
+  echo "FAIL JDAD_TOKEN is still in the container environment after a normal deploy" >&2
+  exit 1
+fi
+echo "ok rollback to a pre-token-file image ($legacy_kind) passes JDAD_TOKEN from the file; the next deploy drops it"

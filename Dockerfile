@@ -23,10 +23,19 @@ COPY sources ./sources
 # bundled into the venv as package data.
 RUN uv sync --frozen --no-dev --no-editable
 
+# Refuse to build an image whose KB doesn't load. This runs against the
+# installed package's bundled data (run from / so no checkout is found),
+# i.e. exactly what ships.
+RUN cd / && /app/.venv/bin/jdad-mcp --check
+
 FROM python:3.12-slim@sha256:5e2bdb1b0d542d5039cffb8181c65930093949194a65c365dfb1b0fe13a4fa5b AS runtime
 
 ARG JDAD_GIT_SHA=unknown
 ENV JDAD_GIT_SHA=$JDAD_GIT_SHA
+# This image reads the token from JDAD_TOKEN_FILE. update-docker.sh checks the
+# label before a rollback: images without it read only JDAD_TOKEN and need
+# deploy/compose.legacy-token.yml to start.
+LABEL io.jdad.token-file="1"
 
 RUN useradd --system --user-group --uid 999 --create-home --home-dir /app \
     --shell /usr/sbin/nologin jdad \

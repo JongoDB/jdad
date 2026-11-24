@@ -1,0 +1,16 @@
+# DRAFT (JON-1341). Takes effect only once `main` has a ruleset that requires
+# code-owner review (JON-1338), and only means something once bots use their
+# own GitHub identity: today every bot acts as JongoDB, so this would let a
+# bot approve its own KB change.
+#
+# KB content and anything that changes what agents are told.
+/practices/        @JongoDB
+/sources/          @JongoDB
+/skills/           @JongoDB
+/commands/         @JongoDB
+/kb-lint.toml      @JongoDB
+/src/jdad/lint.py  @JongoDB
+# Auth, transport and deploy.
+/src/jdad/server.py @JongoDB
+/deploy/           @JongoDB
+/.github/          @JongoDB

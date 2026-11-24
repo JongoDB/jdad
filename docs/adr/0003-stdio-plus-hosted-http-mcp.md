@@ -8,7 +8,7 @@
 
 Agents on Jon's Mac and hosts can run local commands; cloud agents can't. Jon wants hosts to pick up new KB entries without reinstalling. All four target tools support stdio and streamable HTTP MCP servers with custom headers (Claude Code `.mcp.json`; Codex `bearer_token_env_var`; Grok Build `headers` with `${VAR}`; Cursor `mcp.json`). The MCP spec revision 2026-07-28 makes the protocol stateless, which fits a read-only server.
 
-This ADR covers the server and plugin config as merged. The hosted deployment (Docker on the droplet, Cloudflare Full (strict) TLS) merged with PR #2 but isn't proven live yet, so it's recorded separately as [ADR 0005](0005-hosted-deploy-cloudflare-full-strict.md), still Proposed until roadmap item P0.5 passes.
+This ADR covers the server and plugin config as merged. The hosted deployment (Docker on the droplet, Cloudflare Full (strict) TLS) merged with PR #2 and is recorded separately as [ADR 0005](0005-hosted-deploy-cloudflare-full-strict.md), Accepted once roadmap item P0.5 passed on 2026-11-22.
 
 ## Decision
 
