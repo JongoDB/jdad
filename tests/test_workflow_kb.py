@@ -11,7 +11,7 @@ from jdad.kb import KnowledgeBase
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SOURCES = {"openai-harness", "anthropic-harnesses", "anthropic-harness-design", "cc-best-practices"}
-ID_RE = re.compile(r"^- ([a-z0-9.\-]+):", re.MULTILINE)
+ID_RE = re.compile(r"^- \[ \] ([a-z0-9.\-]+):", re.MULTILINE)  # checklist lines (P3.3)
 
 
 @pytest.fixture(scope="module")

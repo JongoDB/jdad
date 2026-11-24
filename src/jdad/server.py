@@ -103,13 +103,15 @@ def get_source(id: str) -> str:
 
 
 @mcp.tool(annotations=READ_ONLY)
-def get_checklist(tags: list[str]) -> str:
-    """Return rules filtered by tags, one line each (`- <id>: <text> (<citation>)`), ready to paste into a plan.
+def get_checklist(tags: list[str], phase: Literal["plan", "review", "ship"] | None = None) -> str:
+    """Return rules filtered by tags as Markdown checkboxes, `- [ ] <rule-id>: <text> (<source URL>)`,
+    or `(KB addition)` for a rule with no source. Paste them into a plan or review and cite the rule IDs.
 
     Tags: frontend, backend, db, infra, observability, testing, security, supply-chain, ci, process, design, ux.
-    An empty list returns every rule.
+    An empty list returns every rule. `phase` (plan, review or ship) keeps the rules marked for that
+    phase plus every rule with no phase; leave it out for all of them.
     """
-    return _kb().get_checklist(tags)
+    return _kb().get_checklist(tags, phase=phase)
 
 
 @mcp.tool(annotations=READ_ONLY)
@@ -124,6 +126,12 @@ def practice_resource(name: str) -> str:
     return _kb().get_practice(name)
 
 
+@mcp.resource("kb://checklists/{tag}")
+def checklist_resource(tag: str) -> str:
+    """The checklist for one tag: the same text as get_checklist([tag])."""
+    return _kb().get_checklist([tag])
+
+
 @mcp.prompt(name="apply-kb")
 def apply_kb(task: str = "", tags: str = "") -> str:
     """Tell an agent to pull the relevant KB checklist before planning and to cite rules in its PR."""
@@ -133,9 +141,9 @@ def apply_kb(task: str = "", tags: str = "") -> str:
 
 Before you write a plan or start implementation:{tag_hint}
 1. Call list_topics to see available practice files and tags.
-2. Call get_checklist with the tags that apply to this work (frontend, backend, db, infra, observability, testing, security, supply-chain, ci, process, design, ux). If you are unsure which tags apply, call search_practices with keywords from the task.
+2. Call get_checklist with phase="plan" and the tags that apply to this work (frontend, backend, db, infra, observability, testing, security, supply-chain, ci, process, design, ux). If you are unsure which tags apply, call search_practices with keywords from the task.
 3. Pull the relevant checklist into your plan. Do not invent rules that are not in the KB, and do not apply a rule whose tag does not fit the work.
-4. When you open a PR, cite the specific KB rules you followed (topic, heading, and the source noted on the rule).
+4. When you open a PR, cite the rule IDs you followed (for example perf.db.n-plus-one), with the source each line links to.
 
 Rule zero: when changing performance, measure first. Profile or trace, fix the top bottleneck, re-measure, and put before/after numbers in the PR.
 {task_block}"""

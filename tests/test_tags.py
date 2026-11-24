@@ -24,7 +24,7 @@ SEEDED = {
 }
 CONTROL = "tags.backend.paginate"
 ALL_IDS = {*SEEDED.values(), CONTROL}
-ID_RE = re.compile(r"^- ([a-z0-9.\-]+):", re.MULTILINE)
+ID_RE = re.compile(r"^- \[ \] ([a-z0-9.\-]+):", re.MULTILINE)  # checklist lines (P3.3)
 
 
 def test_all_six_tags_are_known() -> None:

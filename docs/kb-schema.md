@@ -48,6 +48,7 @@ A rule is a `- ` bullet at the start of a line:
 - <text> (<citation>) {#<id>}
   <optional continuation lines, indented>
   Applies when: <optional condition, indented>
+  Phase: <optional: plan, review and/or ship, indented>
 ```
 
 | Part | Required | Format |
@@ -57,13 +58,14 @@ A rule is a `- ` bullet at the start of a line:
 | ID | yes | `{#<prefix>.<area>.<slug>}`: lowercase letters, digits and hyphens, at least two dot-separated segments, unique across the KB, and the same `<prefix>` for every rule in a file (`perf` for `performance.md`). IDs are permanent: don't renumber or reuse them; retire a rule by deleting it |
 | Continuation | no | Indented lines join the rule's text. The citation and ID end the rule's last text line |
 | Applies when | no | An indented `Applies when: …` line, for rules that are easy to over-apply. Shown in checklists and returned as `applies_when` |
+| Phase | no | An indented `Phase: plan, review` line: the checklist phases the rule belongs to, any of `plan`, `review` and `ship` (case and spacing don't matter). A rule with no `Phase:` line is in every phase. Returned as `phases`. The lint rejects an unknown or repeated phase, an empty line, and a second `Phase:` line on one rule |
 
 Not allowed (lint `rule-format`): nested bullets, numbered items, prose in a section, rules before the first section, sections with no rules. The parser still keeps that text, attached to a rule or reported, so nothing vanishes from a checklist silently, but the KB must not depend on it.
 
 ## What the tools return
 
-- `get_checklist(tags)`: one line per rule, `- <id>: <text> (<citation>)`, plus ` Applies when: …` if present, grouped under the section headings.
-- `search_practices(query, tag?)`: each hit has `rules: [{id, text, tags, citation, origin, applies_when}]` alongside the section's `heading` and raw `body`.
+- `get_checklist(tags, phase?)`: Markdown checkboxes, one per rule, grouped under the section headings: `- [ ] <id>: <text> (<source URL>)`, where the URL is the cited source's `url`, or `(KB addition)` for a rule with no source. An Applies-when note stays in the text as ` _Applies when: …_`. With `phase` (`plan`, `review` or `ship`), only rules marked for that phase or with no `Phase:` line, and a `Phase:` line in the header. `kb://checklists/<tag>` returns the same text as `get_checklist([tag])`.
+- `search_practices(query, tag?)`: each hit has `rules: [{id, text, tags, citation, origin, applies_when, phases}]` alongside the section's `heading` and raw `body`.
 - `get_practice(topic)` and `kb://practices/<name>`: the file as written.
 
 ## Changing the format
