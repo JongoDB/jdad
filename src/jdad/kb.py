@@ -34,6 +34,11 @@ _RULE_START_RE = re.compile(r"^[-*]\s+(.*)$")
 _NUMBERED_RE = re.compile(r"^\s*\d+[.)]\s+(.*)$")
 _NESTED_BULLET_RE = re.compile(r"^\s+[-*+]\s+(.*)$")
 _APPLIES_RE = re.compile(r"^\s+applies when:\s*(.*)$", re.IGNORECASE)
+_PHASE_RE = re.compile(r"^\s+phase:\s*(.*)$", re.IGNORECASE)
+_SOURCE_NAME_RE = re.compile(r"^src:\s*([a-z0-9][a-z0-9-]*)", re.IGNORECASE)
+
+# Checklist phases (docs/kb-schema.md). A rule with no `Phase:` line is in every phase.
+PHASES = ("plan", "review", "ship")
 
 # Source frontmatter (docs/ingestion.md). Files whose name starts with "_"
 # (sources/_TEMPLATE.md) are templates, not entries.
@@ -202,6 +207,10 @@ class Rule:
     tags: tuple[str, ...]
     line: int
     last_line: int = 0
+    phases: tuple[str, ...] = ()
+
+    def in_phase(self, phase: str | None) -> bool:
+        return phase is None or not self.phases or phase in self.phases
 
     @property
     def spans_lines(self) -> bool:
@@ -221,15 +230,21 @@ class Rule:
             "citation": self.citation,
             "origin": self.origin,
             "applies_when": self.applies_when,
+            "phases": list(self.phases),
         }
 
-    def checklist_line(self) -> str:
-        line = f"- {self.id or '(no id)'}: {self.text}"
-        if self.citation:
-            line += f" ({self.citation})"
+    def checklist_line(self, url: str | None = None) -> str:
+        """`- [ ] <id>: <text> (<citation>)`. The citation is the cited source's
+        URL when it's known, `KB addition` for a KB addition, else the raw
+        `src: ...` text. An Applies-when note stays inside the text."""
+        text = self.text
         if self.applies_when:
-            line += f" Applies when: {self.applies_when}"
-        return line
+            text += f" _Applies when: {self.applies_when}_"
+        if self.origin == "kb-addition":
+            cite = "KB addition"
+        else:
+            cite = url or self.citation or "no citation"
+        return f"- [ ] {self.id or '(no id)'}: {text} ({cite})"
 
 
 @dataclass(frozen=True)
@@ -257,7 +272,9 @@ class Section:
         return extract_bullets(self.body)
 
 
-def _finish_rule(raw: str, applies: str | None, tags: tuple[str, ...], line: int, last_line: int = 0) -> Rule:
+def _finish_rule(
+    raw: str, applies: str | None, tags: tuple[str, ...], line: int, last_line: int = 0, phases: tuple[str, ...] = ()
+) -> Rule:
     text = " ".join(raw.split())
     rule_id = None
     match = _RULE_ID_SUFFIX_RE.search(text)
@@ -277,7 +294,28 @@ def _finish_rule(raw: str, applies: str | None, tags: tuple[str, ...], line: int
         tags=tags,
         line=line,
         last_line=max(last_line, line),
+        phases=phases,
     )
+
+
+def _parse_phases(value: str, current: dict, number: int, line: str) -> list[ParseIssue]:
+    """Read a rule's `Phase: plan, review` line into current["phases"]."""
+    if current["phases"] is not None:
+        return [ParseIssue(number, "phase", "more than one 'Phase:' line on one rule", line)]
+    issues: list[ParseIssue] = []
+    phases: list[str] = []
+    names = [name.strip().lower() for name in value.split(",") if name.strip()]
+    if not names:
+        issues.append(ParseIssue(number, "phase", "empty 'Phase:' line: list plan, review or ship, or drop the line", line))
+    for name in names:
+        if name not in PHASES:
+            issues.append(ParseIssue(number, "phase", f"unknown phase '{name}' (known: {', '.join(PHASES)})", line))
+        elif name in phases:
+            issues.append(ParseIssue(number, "phase", f"phase '{name}' is listed twice", line))
+        else:
+            phases.append(name)
+    current["phases"] = phases
+    return issues
 
 
 def parse_rules(
@@ -296,7 +334,9 @@ def parse_rules(
     def close() -> None:
         nonlocal current
         if current is not None:
-            rules.append(_finish_rule(current["raw"], current["applies"], tags, current["line"], current["last"]))
+            rules.append(
+                _finish_rule(current["raw"], current["applies"], tags, current["line"], current["last"], tuple(current["phases"] or ()))
+            )
             current = None
 
     for number, line in lines:
@@ -309,9 +349,14 @@ def parse_rules(
             close()
             if numbered:
                 issues.append(ParseIssue(number, "numbered", "numbered item: use a '- ' bullet", line))
-            current = {"raw": (start or numbered).group(1), "applies": None, "line": number, "last": number}
+            current = {"raw": (start or numbered).group(1), "applies": None, "phases": None, "line": number, "last": number}
             continue
         if line[:1].isspace():
+            phase = _PHASE_RE.match(line)
+            if phase and current is not None:
+                current["last"] = number
+                issues.extend(_parse_phases(phase.group(1), current, number, line))
+                continue
             applies = _APPLIES_RE.match(line)
             nested = _NESTED_BULLET_RE.match(line) or _NUMBERED_RE.match(line)
             if current is None:
@@ -587,31 +632,41 @@ class KnowledgeBase:
             wanted.append(tag)
         return search(self.practices(), query, tags=wanted, limit=limit, response_format=response_format)
 
-    def get_checklist(self, tags: list[str] | None = None) -> str:
+    def get_checklist(self, tags: list[str] | None = None, phase: str | None = None) -> str:
+        """Markdown checkboxes, `- [ ] <id>: <text> (<source URL> | KB addition)`,
+        grouped by topic and section. With a phase, only rules marked for it
+        or with no `Phase:` line."""
+        if phase is not None and phase not in PHASES:
+            raise ValueError(f"unknown phase '{phase}': use one of {', '.join(PHASES)}")
         wanted = {t.strip().lower() for t in (tags or []) if t and t.strip()}
+        urls = {s["cite_as"]: s["url"] for s in self.list_sources() if s.get("cite_as") and s.get("url")}
         blocks: list[str] = []
         for doc in self.practices():
-            matched: list[Section] = []
+            matched: list[tuple[Section, list[Rule]]] = []
             for section in doc.sections:
                 section_tags = {t.lower() for t in section.tags}
                 if wanted and not (section_tags & wanted):
                     continue
-                if section.rules:
-                    matched.append(section)
+                rules = [rule for rule in section.rules if rule.in_phase(phase)]
+                if rules:
+                    matched.append((section, rules))
             if not matched:
                 continue
             lines = [f"# {doc.title}", f"Topic: {doc.topic}"]
             if wanted:
                 lines.append("Tags: " + ", ".join(sorted(wanted)))
+            if phase:
+                lines.append(f"Phase: {phase}")
             lines.append("")
-            for section in matched:
+            for section, rules in matched:
                 suffix = " ".join(f"[{t}]" for t in section.tags)
                 heading = f"## {section.heading}"
                 if suffix:
                     heading = f"{heading} {suffix}"
                 lines.append(heading)
-                for rule in section.rules:
-                    lines.append(rule.checklist_line())
+                for rule in rules:
+                    name = _SOURCE_NAME_RE.match(rule.citation or "")
+                    lines.append(rule.checklist_line(urls.get(name.group(1).lower()) if name else None))
                 lines.append("")
             blocks.append("\n".join(lines).rstrip())
         if not blocks:

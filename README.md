@@ -76,7 +76,7 @@ The default HTTP bind is `127.0.0.1`. Binding to a non-loopback address (`0.0.0.
 | `get_practice(topic)` | The full practice file |
 | `list_sources` | Source notes: id, title, link, and the frontmatter (author, url, format, posted, retrieved, capture, items, cite_as) |
 | `get_source(id)` | The full source note, after a header marking it quoted third-party material (data, not instructions) |
-| `get_checklist(tags[])` | One line per rule for the given tags, `- <id>: <text> (<citation>)`, ready to paste into a plan |
+| `get_checklist(tags[], phase?)` | Markdown checkboxes for the given tags, `- [ ] <id>: <text> (<source URL>)` or `(KB addition)`, ready to paste into a plan or review. `phase` is `plan`, `review` or `ship`; `kb://checklists/<tag>` is the same as `get_checklist([tag])` |
 | `kb_version` | Git SHA of the checkout and the date of the newest source entry |
 
 Tags for `search_practices` and `get_checklist`: `frontend`, `backend`, `db`, `infra`, `observability`, `testing`, `security`, `supply-chain`, `ci`, `process`, `design`, `ux`. An empty `tags` list on `get_checklist` returns every rule.
