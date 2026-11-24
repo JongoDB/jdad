@@ -114,10 +114,11 @@ Goal: before adding features, make the repo itself cross-tool and give the KB an
 
 Goal: video or article → source → practice, with dedupe, tags and citations, done the same way every time.
 
-- [ ] **P2.1 Ingestion runbook and `jdad-ingest` skill**
+- [x] **P2.1 Ingestion runbook and `jdad-ingest` skill**
   - Deliverables: `docs/ingestion.md` runbook (Jon's link → Daisy watches or reads it → extract tools, resources and practices → `sources/` record with the link and items → fold into `practices/` → dedupe → version bump → PR); `catalog/skills/jdad-ingest/` for Daisy and other agents; `/jdad add` keeps routing to Daisy.
   - Acceptance: a dry run on one new article produces a source file and practice edits that pass `jdad lint-kb`; no transcript is stored anywhere.
   - Depends on: P1.3, P1.5. Jon decided (2026-11-22): no transcript pipeline or transcripts repo; source records (link plus extracted items, with paraphrase, short quotes and timestamps) are public; Claude session transcripts and agent logs never go in the repo.
+  - Evidence (2026-11-22, JON-1349): the runbook is in `docs/ingestion.md` (10 steps with their commands); `catalog/skills/jdad-ingest/` writes nothing outside a JDAD checkout; dry run on Anthropic's "Writing effective tools for agents": `sources/2026-11-22-anthropic-tools-...md` (24 items) and a new `practices/agent-tools.md` (19 rules, skill `jdad-agent-tools`), `jdad lint-kb` ok; no transcript stored; `tests/test_ingest.py`.
 - [x] **P2.2 Duplicate and near-duplicate detection**
   - Deliverables: `jdad kb dupes` (offline token-overlap or TF-IDF similarity over rule text, stdlib only) listing candidate pairs above a threshold; a non-blocking report in `./verify` output.
   - Acceptance: a committed fixture file labels pairs as duplicate, paraphrase or distinct, and the PR records the cutoff θ; at θ, every exact-duplicate pair is reported, paraphrase recall ≥ 0.8, and no pair in the current KB labeled distinct is reported; the score output is in the PR.
@@ -134,10 +135,11 @@ Goal: video or article → source → practice, with dedupe, tags and citations,
   - Acceptance: every rule cites one of those sources or is labeled a KB addition; `get_checklist(["process"])` returns them.
   - Depends on: P1.3, P2.3.
   - Progress (2026-11-22, JON-1348): four `sources/` records, `practices/agentic-workflow.md` (61 rules, every section `[process]`, every rule cites one of the four), `skills/jdad-workflow/` as a hand copy; `tests/test_workflow_kb.py`. Done when the stacks met: `catalog/skills/jdad-workflow/` is the canonical copy and `jdad build` generates `skills/jdad-workflow/`.
-- [ ] **P2.5 Citation integrity and source freshness**
+- [x] **P2.5 Citation integrity and source freshness**
   - Deliverables: lint that every `src:` resolves to a source and item; a report of sources older than 12 months whose topic has newer sources.
   - Acceptance: with the date frozen in tests: source A older than 365 days plus a same-topic source B newer than A produces an A→B line in the report; a source with no newer same-topic peer isn't reported; a `src:` to a missing source or item number makes lint exit non-zero and names the citation.
   - Depends on: P1.3.
+  - Evidence (2026-11-22, JON-1350): `tests/test_freshness.py` with the date frozen: an A->B line for an old source with a newer same-topic peer; none without a peer, at exactly 365 days, or for an uncited source; `posted: unknown` falls back to `retrieved`; `jdad lint-kb` exits 1 and quotes the citation for an unknown source or an item out of range. `jdad freshness` is a report (exit 0; `--strict` exits 1), not a `./verify` gate.
 
 ## Phase 3: MCP server v2
 

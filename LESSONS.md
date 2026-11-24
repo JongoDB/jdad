@@ -61,3 +61,9 @@ Things a reviewer caught that an agent should have known (AGENTS.md R-flow-7). R
 - What happened: the protection plan recommended a fine-grained PAT for a collaborator machine user; those can't reach another user's personal repo (Checker on PR #12).
 - Rule: confirm the credential type works for the account and repo ownership before writing it into a plan.
 - Source: https://github.com/JongoDB/jdad/pull/12 (fixed in 3f120db)
+
+## 2026-11-23: Check every PR's base before READY
+
+- What happened: Checker batch 14 passed six stacked PRs, and Daisy merged them in order. Only #20 reached `main`. #21, #17, #22, #23 and #24 each merged into the branch below, because their bases were never retargeted after #20 landed; their bodies only said "I'll retarget as they land". Landing them took an extra PR (#30) and another Checker pass.
+- Rule: before writing a READY line, check each PR's base with `gh pr view N --json baseRefName`. If it isn't `main`, retarget it once the PR below has merged, or say in the READY line that it's stacked and on what. After each merge in a stack, retarget the next PR straight away.
+- Source: https://github.com/JongoDB/jdad/pull/30 (Daisy, brief after Checker batch 14; JON-1348 note of 17:37 ET)

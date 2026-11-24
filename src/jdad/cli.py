@@ -3,6 +3,8 @@
 - `jdad lint-kb`: content checks on practices/, sources/, skills/ and commands/.
 - `jdad build [--check]`: compile catalog/ into skills/, generated/agents-skills/
   and generated/cursor-rules/.
+- `jdad freshness [--today DATE] [--strict]`: sources over a year old whose
+  topic cites a newer source.
 - `jdad kb dupes [--threshold]`: rule pairs that look like duplicates (a report).
 """
 
@@ -10,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date
 from pathlib import Path
 
 from jdad import build as build_mod
@@ -54,6 +57,19 @@ def _build(args: argparse.Namespace) -> int:
         return 1
 
 
+def _freshness(args: argparse.Namespace) -> int:
+    from jdad.freshness import freshness_report
+
+    root = Path(args.root).resolve() if args.root else resolve_kb_root()
+    today = date.fromisoformat(args.today) if args.today else date.today()
+    lines = freshness_report(root, today)
+    for line in lines:
+        print(line)
+    if not lines:
+        print(f"jdad freshness: no stale sources as of {today}")
+    return 1 if lines and args.strict else 0
+
+
 def _kb_dupes(args: argparse.Namespace) -> int:
     root = Path(args.root).resolve() if args.root else resolve_kb_root()
     for line in dupes_mod.report(root, args.threshold):
@@ -71,6 +87,11 @@ def main(argv: list[str] | None = None) -> int:
     build.add_argument("--check", action="store_true", help="write nothing; fail if any output is out of date")
     build.add_argument("--root", default=".", help="repo root (default: the current directory)")
     build.set_defaults(func=_build)
+    fresh = sub.add_parser("freshness", help="list sources over a year old whose topic cites a newer source")
+    fresh.add_argument("--root", help="KB root (default: KB_ROOT, then this checkout).")
+    fresh.add_argument("--today", help="date to measure from, YYYY-MM-DD (default: today)")
+    fresh.add_argument("--strict", action="store_true", help="exit 1 when anything is reported")
+    fresh.set_defaults(func=_freshness)
     kb = sub.add_parser("kb", help="Reports about the knowledge base.")
     kb_sub = kb.add_subparsers(dest="kb_command", required=True)
     dupes = kb_sub.add_parser("dupes", help="List rule pairs that look like duplicates (always exits 0).")
