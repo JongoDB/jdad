@@ -20,7 +20,7 @@ from jdad.search import tokenize
 
 # The cutoff θ, chosen from the labeled pairs in tests/fixtures/dupes/pairs.json:
 # every duplicate scores 1.0, 13 of 15 paraphrases score at least 0.601, and
-# the highest distinct pair scores 0.579. At 0.65 paraphrase recall falls to
+# the highest distinct pair scores 0.580. At 0.65 paraphrase recall falls to
 # 0.73. Rerun the fixture before moving it.
 THRESHOLD = 0.6
 

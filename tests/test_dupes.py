@@ -93,3 +93,53 @@ def test_pairs_come_best_first(tmp_path: Path) -> None:
     root = _kb(tmp_path, ["Cache expensive queries.", "Cache expensive queries on write.", "Cache expensive queries."])
     scores = [score for score, _a, _b in kb_dupes(root, 0.0)]
     assert len(scores) == 3 and scores == sorted(scores, reverse=True) and scores[0] == 1.0 > scores[-1]
+
+
+# ---- Checker's #34 follow-ups (JON-1363) ----
+
+
+def test_every_duplicate_case_differs_as_text() -> None:
+    """A pair of identical strings tests nothing the normaliser does."""
+    assert all(a != b for a, b in FIXTURE["duplicate"])
+
+
+def test_golden_score_pins_the_formula() -> None:
+    """Hand-computed TF-IDF cosine for two texts sharing one of two words.
+
+    n = 2; df(alpha) = 2, df(beta) = df(gamma) = 1. With idf = ln((1 + n) / (1 + df)) + 1:
+    idf(alpha) = 1, idf(beta) = idf(gamma) = ln(3/2) + 1 = 1.405465. Each vector is
+    (1, 1.405465) normalised, so the cosine is 1 / (1 + 1.405465**2) = 0.336097.
+    """
+    assert pair_scores(["alpha beta", "alpha gamma"]) == {(0, 1): 0.336}
+    assert pair_scores(["alpha beta", "gamma delta"]) == {(0, 1): 0.0}
+
+
+def _ordered_kb(root: Path, ids: list[str]) -> Path:
+    (root / "practices").mkdir(parents=True)
+    (root / "sources").mkdir()
+    lines = [f"- Rule number {n} about {rid}. (KB addition) {{#{rid}}}" for n, rid in enumerate(ids)]
+    (root / "practices" / "t.md").write_text("# T\n## A [backend]\n" + "\n".join(lines) + "\n")
+    return root
+
+
+def test_scores_are_rounded_before_the_threshold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A raw 0.5996 is reported as 0.6, so it counts at θ = 0.6."""
+    from jdad import dupes
+
+    monkeypatch.setattr(dupes, "similarity", lambda a, b: 0.5996)
+    root = _ordered_kb(tmp_path, ["t.a.one", "t.a.two"])
+    assert kb_dupes(root, 0.6) == [(0.6, "t.a.one", "t.a.two")]
+    assert dupes.report(root, 0.6)[0] == "0.600  t.a.one  t.a.two"
+
+
+def test_equal_scores_are_ordered_by_rule_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Ties break on the IDs, sorted within each pair, whatever the file order."""
+    from jdad import dupes
+
+    monkeypatch.setattr(dupes, "similarity", lambda a, b: 0.7)
+    root = _ordered_kb(tmp_path, ["t.z.last", "t.m.mid", "t.a.first"])
+    assert kb_dupes(root, 0.6) == [
+        (0.7, "t.a.first", "t.m.mid"),
+        (0.7, "t.a.first", "t.z.last"),
+        (0.7, "t.m.mid", "t.z.last"),
+    ]

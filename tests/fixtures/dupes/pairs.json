@@ -5,7 +5,7 @@
     ["Add an index for every column you filter or join on.", "add an index for every column you filter or join on."],
     ["Set a timeout on every outbound HTTP call.", "Set a  timeout on every outbound HTTP call!"],
     ["Never log secrets, tokens or passwords.", "Never log secrets, tokens, or passwords."],
-    ["Lazy-load images below the fold.", "Lazy-load images below the fold."],
+    ["Lazy-load images below the fold.", "lazy load images below the fold"],
     ["Run the full test suite before you say a task is done.", "Run the full test suite before you say a task is done"]
   ],
   "paraphrase": [
@@ -42,7 +42,7 @@
     ["Use a reviewer that didn't write the code.", "Require a passing CI run before merging the code."],
     ["Write the plan down before writing code.", "Delete dead code as soon as you find it."]
   ],
-  "_kb_distinct_about": "The eight highest-scoring rule pairs in practices/ on main ef7ebf2 (93 rules), each read and labeled by hand: related, but different instructions.",
+  "_kb_distinct_about": "The highest-scoring rule pairs in practices/, each read and labeled by hand: related, but different instructions. The first eight are from main ef7ebf2 (93 rules); the last two are the new top-8 pairs after #33 added agent-tools (main 3ad71e7, 112 rules).",
   "kb_distinct": [
     ["wf.session.commit-and-note", "wf.session.read-state"],
     ["wf.harness.ablate-one-at-a-time", "wf.plan.one-feature"],
@@ -51,6 +51,8 @@
     ["wf.repo.plans-in-repo", "wf.repo.system-of-record"],
     ["wf.harness.ablate-one-at-a-time", "wf.harness.retest-on-new-model"],
     ["wf.arch.invariants", "wf.plan.deliverables-not-path"],
-    ["wf.session.json-task-list", "wf.session.reset-with-handoff"]
+    ["wf.session.json-task-list", "wf.session.reset-with-handoff"],
+    ["tools.eval.read-transcripts", "wf.repo.omit-discoverable"],
+    ["tools.choose.consolidate", "tools.eval.realistic-tasks"]
   ]
 }
