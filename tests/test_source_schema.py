@@ -204,3 +204,32 @@ def test_underscore_practice_files_are_never_served(tmp_path: Path) -> None:
     (root / "practices" / "_draft.md").write_text("# Draft\n")
     with pytest.raises(FileNotFoundError):
         KnowledgeBase(root).get_practice("_draft")
+
+
+# Checker 12B (JON-1360): duplicate keys, title preference, _-prefixed files.
+
+
+def test_duplicate_frontmatter_key_fails(tmp_path: Path) -> None:
+    text = source_text().replace("format: post\n", "format: post\nformat: reel\n")
+    assert any("duplicate key 'format'" in m for m in _source_findings(tmp_path, text))
+
+
+def test_list_sources_prefers_the_frontmatter_title(tmp_path: Path) -> None:
+    text = source_text(title='"Frontmatter title"')
+    assert "# Ten tips" in text
+    root = make_kb(tmp_path, {"2026-01-02-tips.md": text})
+    assert [s["title"] for s in KnowledgeBase(root).list_sources()] == ["Frontmatter title"]
+
+
+def test_list_sources_falls_back_to_the_heading(tmp_path: Path) -> None:
+    root = make_kb(tmp_path, {"2026-01-02-tips.md": source_text(title=None)})
+    assert [s["title"] for s in KnowledgeBase(root).list_sources()] == ["Ten tips"]
+
+
+def test_underscore_files_are_left_out_of_listings(tmp_path: Path) -> None:
+    root = make_kb(tmp_path, {"2026-01-02-tips.md": source_text(), "_2099-01-01-draft.md": source_text()})
+    (root / "practices" / "_2099-01-01-draft.md").write_text("# Draft\n## D [db]\n- Draft rule. (KB addition) {#d.d.rule}\n")
+    kb = KnowledgeBase(root)
+    assert [s["id"] for s in kb.list_sources()] == ["2026-01-02-tips"]
+    assert [t["topic"] for t in kb.list_topics()] == ["p"]
+    assert kb.newest_entry_date() == "2026-01-02"

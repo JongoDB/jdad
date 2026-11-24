@@ -904,11 +904,11 @@ def _citation_problem(citation: str, sources: dict[str, tuple[str, int]]) -> str
     name, numbers = match.group(1), [int(n) for n in re.findall(r"\d+", match.group(2))]
     if name not in sources:
         known = ", ".join(sorted(sources)) or "none"
-        return f"citation names source '{name}', but no source has cite_as '{name}' (known: {known})"
+        return f"citation '({citation})' names source '{name}', but no source has cite_as '{name}' (known: {known})"
     path, items = sources[name]
     out_of_range = [n for n in numbers if not 1 <= n <= items]
     if out_of_range:
-        return f"citation item(s) {', '.join(f'#{n}' for n in out_of_range)} outside 1..{items} for {path}"
+        return f"citation '({citation})': item(s) {', '.join(f'#{n}' for n in out_of_range)} outside 1..{items} for {path}"
     return None
 
 
