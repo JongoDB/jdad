@@ -190,8 +190,8 @@ def test_rule_zero_is_in_every_tags_checklist() -> None:
 
 def test_checklist_lines_carry_ids_and_citations() -> None:
     checklist = KnowledgeBase(REPO_ROOT).get_checklist(["db"])
-    # P3.3: a checkbox, the ID, and the cited source's URL in place of "(src: breakingbreach #8)".
-    assert "- [ ] perf.db.n-plus-one: Kill N+1 (batch/join). (https://www.instagram.com/reel/DfMYnLZyQOE/)" in checklist
+    # P3.3: a checkbox, the ID, and the cited source's URL plus the item, for "(src: breakingbreach #8)".
+    assert "- [ ] perf.db.n-plus-one: Kill N+1 (batch/join). (https://www.instagram.com/reel/DfMYnLZyQOE/ #8)" in checklist
     rule_lines = [line for line in checklist.splitlines() if line.startswith("- ")]
     assert rule_lines and all(re.match(r"^- \[ \] [a-z][a-z0-9-]*(\.[a-z0-9-]+)+: ", line) for line in rule_lines)
     assert "OpenTelemetry" not in checklist

@@ -152,11 +152,11 @@ def test_list_sources_returns_the_new_fields() -> None:
     assert entry["author"] and entry["capture"]
 
 
-def test_template_is_not_a_source() -> None:
+def test_template_is_not_a_source(newest_entry: str) -> None:
     kb = KnowledgeBase(REPO_ROOT)
     assert (REPO_ROOT / "sources" / "_TEMPLATE.md").is_file()
     assert all(not s["id"].startswith("_") for s in kb.list_sources())
-    assert kb.version()["newest_entry"] == "2026-11-22"
+    assert kb.version()["newest_entry"] == newest_entry
     fields, problems = parse_frontmatter((REPO_ROOT / "sources" / "_TEMPLATE.md").read_text())
     assert problems == []
     assert set(fields) == {"title", "author", "url", "format", "posted", "retrieved", "capture", "items", "cite_as"}

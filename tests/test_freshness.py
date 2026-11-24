@@ -99,6 +99,44 @@ def test_uncited_sources_and_multiple_topics(tmp_path: Path) -> None:
     ]
 
 
+def test_a_same_date_peer_is_not_newer(tmp_path: Path) -> None:
+    """Checker (#32, JON-1363): two old sources posted the same day don't report each other."""
+    root = make_kb(
+        tmp_path,
+        {"2026-01-02-a.md": source("a", "2025-01-10"), "2026-01-02-b.md": source("b", "2025-01-10")},
+        {"api.md": practice("api", "a", "b")},
+    )
+    assert freshness_report(root, TODAY) == []
+
+
+def test_same_date_old_sources_are_listed_in_id_order(tmp_path: Path) -> None:
+    """Checker (#32, JON-1363): ties on date break on the source ID, not file or citation order."""
+    root = make_kb(
+        tmp_path,
+        {
+            "2026-01-02-zed.md": source("zed", "2025-01-10"),
+            "2026-01-02-abe.md": source("abe", "2025-01-10"),
+            "2026-01-02-new.md": source("new", "2026-09-01"),
+        },
+        {"api.md": practice("api", "zed", "new", "abe")},
+    )
+    assert freshness_report(root, TODAY) == [
+        "2026-01-02-abe (2025-01-10) -> 2026-01-02-new (2026-09-01) [topic api]",
+        "2026-01-02-zed (2025-01-10) -> 2026-01-02-new (2026-09-01) [topic api]",
+    ]
+
+
+def test_report_reads_citations_the_way_lint_accepts_them(tmp_path: Path) -> None:
+    """Checker (#32, JON-1363): `(src:old #1)` passes lint, so the report must count it too."""
+    root = make_kb(
+        tmp_path,
+        {"2026-01-02-old.md": source("old", "2025-01-10"), "2026-01-02-new.md": source("new", "2026-09-01")},
+        {"api.md": "# api\n## A [backend]\n- Rule a. (src:old #1) {#api.a.r0}\n- Rule b. (src:  new  #2) {#api.a.r1}\n"},
+    )
+    assert main(["lint-kb", "--root", str(root)]) == 0
+    assert freshness_report(root, TODAY) == ["2026-01-02-old (2025-01-10) -> 2026-01-02-new (2026-09-01) [topic api]"]
+
+
 def test_repo_has_nothing_stale_today() -> None:
     assert freshness_report(REPO_ROOT, date(2026, 11, 22)) == []
 

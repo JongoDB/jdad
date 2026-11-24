@@ -64,7 +64,7 @@ Not allowed (lint `rule-format`): nested bullets, numbered items, prose in a sec
 
 ## What the tools return
 
-- `get_checklist(tags, phase?)`: Markdown checkboxes, one per rule, grouped under the section headings: `- [ ] <id>: <text> (<source URL>)`, where the URL is the cited source's `url`, or `(KB addition)` for a rule with no source. An Applies-when note stays in the text as ` _Applies when: …_`. With `phase` (`plan`, `review` or `ship`), only rules marked for that phase or with no `Phase:` line, and a `Phase:` line in the header. `kb://checklists/<tag>` returns the same text as `get_checklist([tag])`.
+- `get_checklist(tags, phase?)`: Markdown checkboxes, one per rule, grouped under the section headings: `- [ ] <id>: <text> (<source URL> #n)`, where the URL is the cited source's `url` and `#n` the cited item numbers (rules from one source share its URL), or `(KB addition)` for a rule with no source. An Applies-when note stays in the text as ` _Applies when: …_`. With `phase` (`plan`, `review` or `ship`), only rules marked for that phase or with no `Phase:` line, and a `Phase:` line in the header. `kb://checklists/<tag>` returns the same text as `get_checklist([tag])`.
 - `search_practices(query, tag?)`: each hit has `rules: [{id, text, tags, citation, origin, applies_when, phases}]` alongside the section's `heading` and raw `body`.
 - `get_practice(topic)` and `kb://practices/<name>`: the file as written.
 

@@ -12,15 +12,14 @@ report changes as time passes, without any commit.
 
 from __future__ import annotations
 
-import re
 from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
 from jdad.kb import KnowledgeBase
+from jdad.lint import SRC_CITATION_RE  # read citations exactly as lint accepts them
 
 MAX_AGE_DAYS = 365
-_SRC_RE = re.compile(r"^src: ([a-z0-9-]+) #")
 
 
 def _parse_date(value: str) -> date | None:
@@ -42,7 +41,7 @@ def freshness_report(root: Path | str, today: date) -> list[str]:
     for doc in kb.practices():
         for section in doc.sections:
             for rule in section.rules:
-                match = _SRC_RE.match(rule.citation or "")
+                match = SRC_CITATION_RE.match(rule.citation or "")
                 if match and match.group(1) in dated:
                     cited_by_topic[doc.topic].add(match.group(1))
 

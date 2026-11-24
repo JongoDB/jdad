@@ -114,3 +114,32 @@ def test_dry_run_skill_mirrors_the_practice_rules() -> None:
     assert rule_lines(REPO_ROOT / "catalog/skills/jdad-agent-tools/SKILL.md") == rule_lines(
         REPO_ROOT / "practices/agent-tools.md"
     )
+
+
+# ---- Checker's #33 follow-ups (JON-1363) ----
+
+
+def test_skill_never_in_the_repo_list() -> None:
+    """The skill's own list of what never goes in the repo, item by item."""
+    never = SKILL.split("## Never in the repo", 1)[1].split("\n## ", 1)[0]
+    items = re.findall(r"^- (.+)$", never, re.MULTILINE)
+    assert len(items) == 3, items
+    transcripts, logs, secrets = items
+    assert "transcripts" in transcripts and "article text" in transcripts
+    assert all(path in logs for path in ("`.jsonl`", "`.claude/projects/`", "`.remember/`"))
+    assert "anything copied from them" in logs
+    assert "Secrets" in secrets and "tokens" in secrets and "keys" in secrets
+
+
+def test_skill_forbids_a_transcript_step() -> None:
+    step = next(line for line in SKILL.splitlines() if line.startswith("2. "))
+    assert "No transcript step" in step and "don't run a transcript tool" in step
+
+
+@pytest.mark.parametrize("text", [RUNBOOK, SKILL], ids=["runbook", "skill"])
+def test_pr_step_names_the_sections_not_a_missing_template(text: str) -> None:
+    """Step 10 named a PR template the repo doesn't have; it now names the sections (R-flow-6)."""
+    step = next(line for line in text.splitlines() if line.startswith("10. "))
+    assert "template" not in step.lower()
+    for section in ("Linear card", "What changed and why", "Evidence", "Unverified"):
+        assert section in step, section

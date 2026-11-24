@@ -36,6 +36,7 @@ _NESTED_BULLET_RE = re.compile(r"^\s+[-*+]\s+(.*)$")
 _APPLIES_RE = re.compile(r"^\s+applies when:\s*(.*)$", re.IGNORECASE)
 _PHASE_RE = re.compile(r"^\s+phase:\s*(.*)$", re.IGNORECASE)
 _SOURCE_NAME_RE = re.compile(r"^src:\s*([a-z0-9][a-z0-9-]*)", re.IGNORECASE)
+_CITED_ITEMS_RE = re.compile(r"^src:\s*[a-z0-9][a-z0-9-]*\s+(#\d+(?:\s*,\s*#\d+)*)$", re.IGNORECASE)
 
 # Checklist phases (docs/kb-schema.md). A rule with no `Phase:` line is in every phase.
 PHASES = ("plan", "review", "ship")
@@ -235,15 +236,19 @@ class Rule:
 
     def checklist_line(self, url: str | None = None) -> str:
         """`- [ ] <id>: <text> (<citation>)`. The citation is the cited source's
-        URL when it's known, `KB addition` for a KB addition, else the raw
-        `src: ...` text. An Applies-when note stays inside the text."""
+        URL plus the item numbers (`https://... #8`) when the source is known,
+        `KB addition` for a KB addition, else the raw `src: ...` text. An
+        Applies-when note stays inside the text."""
         text = self.text
         if self.applies_when:
             text += f" _Applies when: {self.applies_when}_"
+        items = _CITED_ITEMS_RE.search(self.citation or "")
         if self.origin == "kb-addition":
             cite = "KB addition"
+        elif url and items:
+            cite = f"{url} {items.group(1)}"  # one URL per source; the item tells rules apart
         else:
-            cite = url or self.citation or "no citation"
+            cite = self.citation or url or "no citation"
         return f"- [ ] {self.id or '(no id)'}: {text} ({cite})"
 
 
@@ -633,7 +638,7 @@ class KnowledgeBase:
         return search(self.practices(), query, tags=wanted, limit=limit, response_format=response_format)
 
     def get_checklist(self, tags: list[str] | None = None, phase: str | None = None) -> str:
-        """Markdown checkboxes, `- [ ] <id>: <text> (<source URL> | KB addition)`,
+        """Markdown checkboxes, `- [ ] <id>: <text> (<source URL> #n | KB addition)`,
         grouped by topic and section. With a phase, only rules marked for it
         or with no `Phase:` line."""
         if phase is not None and phase not in PHASES:

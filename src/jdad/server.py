@@ -104,7 +104,7 @@ def get_source(id: str) -> str:
 
 @mcp.tool(annotations=READ_ONLY)
 def get_checklist(tags: list[str], phase: Literal["plan", "review", "ship"] | None = None) -> str:
-    """Return rules filtered by tags as Markdown checkboxes, `- [ ] <rule-id>: <text> (<source URL>)`,
+    """Return rules filtered by tags as Markdown checkboxes, `- [ ] <rule-id>: <text> (<source URL> #n)`,
     or `(KB addition)` for a rule with no source. Paste them into a plan or review and cite the rule IDs.
 
     Tags: frontend, backend, db, infra, observability, testing, security, supply-chain, ci, process, design, ux.
