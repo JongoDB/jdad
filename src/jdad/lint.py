@@ -815,7 +815,7 @@ def lint_kb(root: Path) -> list[Finding]:
 
 _DATE_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$")
 _CITE_AS_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
-_SRC_CITATION_RE = re.compile(r"^src:\s*([a-z0-9][a-z0-9-]*)\s+(#\d+(?:\s*,\s*#\d+)*)$")
+SRC_CITATION_RE = re.compile(r"^src:\s*([a-z0-9][a-z0-9-]*)\s+(#\d+(?:\s*,\s*#\d+)*)$")
 
 
 _ITEMS_HEADING_RE = re.compile(r"^## The (\d+) items\b", re.MULTILINE)
@@ -898,7 +898,7 @@ def _source_findings(root: Path) -> tuple[list[Finding], dict[str, tuple[str, in
 
 
 def _citation_problem(citation: str, sources: dict[str, tuple[str, int]]) -> str | None:
-    match = _SRC_CITATION_RE.match(citation)
+    match = SRC_CITATION_RE.match(citation)
     if not match:
         return f"citation '({citation})' isn't '(src: <cite_as> #n[, #m])'"
     name, numbers = match.group(1), [int(n) for n in re.findall(r"\d+", match.group(2))]
