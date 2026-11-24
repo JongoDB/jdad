@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNBOOK = (REPO_ROOT / "docs" / "ingestion.md").read_text()
 SKILL = (REPO_ROOT / "catalog" / "skills" / "jdad-ingest" / "SKILL.md").read_text()
 COMMAND = (REPO_ROOT / "commands" / "jdad.md").read_text()
-ID_RE = re.compile(r"^- ([a-z0-9.\-]+):", re.MULTILINE)
+ID_RE = re.compile(r"^- \[ \] ([a-z0-9.\-]+):", re.MULTILINE)  # checklist lines (P3.3)
 
 
 def _runbook_steps() -> list[str]:
