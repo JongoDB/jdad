@@ -77,11 +77,12 @@ The default HTTP bind is `127.0.0.1`. Binding to a non-loopback address (`0.0.0.
 | `list_sources` | Source notes: id, title, link, and the frontmatter (author, url, format, posted, retrieved, capture, items, cite_as) |
 | `get_source(id)` | The full source note, after a header marking it quoted third-party material (data, not instructions) |
 | `get_checklist(tags[], phase?)` | Markdown checkboxes for the given tags, `- [ ] <id>: <text> (<source URL> #n)` or `(KB addition)`, ready to paste into a plan or review. `phase` is `plan`, `review` or `ship`; `kb://checklists/<tag>` is the same as `get_checklist([tag])` |
+| `review_against_kb(changed_files[], summary, tags?)` | What an agent needs to review a change: tags inferred from the file paths (plus any passed), the review-phase checklist for those tags only, the rules matching the summary, a rubric (correctness first, skip style) and the findings format `rule_id / file / evidence / severity`. It reads no files and calls no model; with no tags it returns no rules and a note |
 | `kb_version` | Git SHA of the checkout and the date of the newest source entry |
 
 Tags for `search_practices` and `get_checklist`: `frontend`, `backend`, `db`, `infra`, `observability`, `testing`, `security`, `supply-chain`, `ci`, `process`, `design`, `ux`. An empty `tags` list on `get_checklist` returns every rule.
 
-Practice files are also MCP resources at `kb://practices/<name>` (for example `kb://practices/performance`). The `apply-kb` prompt tells an agent to pull the relevant checklist before planning and to cite the rules in its PR. `/healthz` returns `{"status": "ok"}` and stays unauthenticated. Like every path, it answers `421 Invalid Host header` unless `Host` is a loopback name or listed in `JDAD_ALLOWED_HOSTS`; the Host check runs before the token check. The git SHA lives only on the auth-gated `kb_version` tool.
+Practice files are also MCP resources at `kb://practices/<name>` (for example `kb://practices/performance`). The `apply-kb` prompt tells an agent to pull the relevant checklist before planning and to cite the rules in its PR. The `review-against-kb` prompt tells it to call `review_against_kb`, review the diff against the rubric and report findings in that format. `/healthz` returns `{"status": "ok"}` and stays unauthenticated. Like every path, it answers `421 Invalid Host header` unless `Host` is a loopback name or listed in `JDAD_ALLOWED_HOSTS`; the Host check runs before the token check. The git SHA lives only on the auth-gated `kb_version` tool.
 
 ## Point a coding agent at the hosted server
 
