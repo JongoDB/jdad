@@ -6,7 +6,7 @@ There is one shared token, and the server accepts only one at a time. Every clie
 
 ## Steps (on the droplet, as the deploy user)
 
-1. **List the clients first**: every host and agent config that sends `Authorization: Bearer` to `https://jdad-mcp.jondevs.com/mcp`. That means the Claude Code plugin hosts (`JDAD_TOKEN` in the environment), Codex (`bearer_token_env_var`), Cursor and Grok Build configs, and any scripts.
+1. **List the clients first**: every host and agent config that sends `Authorization: Bearer` to `https://jdad-mcp.jondevs.com/mcp`. That means the Claude Code plugin hosts (the plugin's `jdad_token` option from 0.8.0: `/config` or `claude plugin configure jdad@jdad --values-stdin`, see the README; `JDAD_TOKEN` in the environment for a `jdad-env` user-scope entry or a pre-0.8.0 plugin), Codex (`bearer_token_env_var`), Cursor and Grok Build configs, and any scripts.
 2. **Write the new token** without printing it:
 
    ```bash
@@ -40,4 +40,4 @@ If the token was exposed, do steps 2 to 4 first and the client updates after, ac
 
 ## Later
 
-A second accepted token during rotation (no flag day) is tracked as an idea in the red-team review (M1). Token entry through the plugin's `userConfig` is P3.7.
+A second accepted token during rotation (no flag day) is tracked as an idea in the red-team review (M1). Token entry through the plugin's `userConfig` is P3.7 (0.8.0).

@@ -110,19 +110,28 @@ def test_a_same_date_peer_is_not_newer(tmp_path: Path) -> None:
 
 
 def test_same_date_old_sources_are_listed_in_id_order(tmp_path: Path) -> None:
-    """Checker (#32, JON-1363): ties on date break on the source ID, not file or citation order."""
+    """Checker (#32, JON-1363; #36, JON-1366): ties on date break on the source ID, not file,
+    citation or set order. Eight same-date sources, so a dropped tie-break shows up under
+    any hash seed (two sources caught it in only 16 of 41 seeds)."""
+    names = ["zed", "abe", "kit", "bo", "yan", "cy", "moe", "dot"]
+    sources = {f"2026-01-02-{n}.md": source(n, "2025-01-10") for n in names}
+    sources["2026-01-02-new.md"] = source("new", "2026-09-01")
+    root = make_kb(tmp_path, sources, {"api.md": practice("api", *names[:4], "new", *names[4:])})
+    assert freshness_report(root, TODAY) == [
+        f"2026-01-02-{n} (2025-01-10) -> 2026-01-02-new (2026-09-01) [topic api]" for n in sorted(names)
+    ]
+
+
+def test_topics_are_reported_in_name_order_not_file_order(tmp_path: Path) -> None:
+    """Checker (#36, JON-1366): `api-v2.md` sorts before `api.md` as a file, but topic `api` comes first."""
     root = make_kb(
         tmp_path,
-        {
-            "2026-01-02-zed.md": source("zed", "2025-01-10"),
-            "2026-01-02-abe.md": source("abe", "2025-01-10"),
-            "2026-01-02-new.md": source("new", "2026-09-01"),
-        },
-        {"api.md": practice("api", "zed", "new", "abe")},
+        {"2026-01-02-old.md": source("old", "2025-01-10"), "2026-01-02-new.md": source("new", "2026-09-01")},
+        {"api-v2.md": practice("v2", "old", "new"), "api.md": practice("api", "old", "new")},
     )
     assert freshness_report(root, TODAY) == [
-        "2026-01-02-abe (2025-01-10) -> 2026-01-02-new (2026-09-01) [topic api]",
-        "2026-01-02-zed (2025-01-10) -> 2026-01-02-new (2026-09-01) [topic api]",
+        "2026-01-02-old (2025-01-10) -> 2026-01-02-new (2026-09-01) [topic api]",
+        "2026-01-02-old (2025-01-10) -> 2026-01-02-new (2026-09-01) [topic api-v2]",
     ]
 
 

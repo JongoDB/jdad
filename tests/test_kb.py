@@ -140,3 +140,13 @@ def test_installed_wheel_layout_uses_bundled_data_not_parents(
     monkeypatch.chdir(project)
     monkeypatch.setattr(kbmod, "__file__", str(pkg / "kb.py"))
     assert resolve_kb_root() == (pkg / "data").resolve()
+
+
+def test_newest_entry_is_the_latest_date_not_the_earliest(tmp_path: Path) -> None:
+    """Checker (#36, JON-1366): pin max, not min, across sources and practices."""
+    (tmp_path / "practices").mkdir()
+    (tmp_path / "sources").mkdir()
+    for name in ("2025-01-01-a.md", "2026-03-01-c.md", "2025-07-01-b.md", "_TEMPLATE.md"):
+        (tmp_path / "sources" / name).write_text("# x\n")
+    (tmp_path / "practices" / "2026-02-01-p.md").write_text("# P\n")
+    assert KnowledgeBase(tmp_path).newest_entry_date() == "2026-03-01"

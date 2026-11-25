@@ -157,3 +157,49 @@ def test_accepted_adrs_only_claim_what_is_in_the_tree(path: Path) -> None:
         if "{" not in rel and not (REPO_ROOT / rel).exists()
     ]
     assert not missing, f"paths named in an Accepted ADR but absent: {missing}"
+
+
+# ---- deploy commands (Checker on #36, JON-1366) ----
+
+_FENCE_RE = re.compile(r"^```[a-z]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
+_COMPOSE_UP_RE = re.compile(r"\bdocker compose\b.*\bup\b")
+
+
+def _doc_files() -> list[Path]:
+    return [REPO_ROOT / "README.md", *sorted((REPO_ROOT / "docs").rglob("*.md"))]
+
+
+def test_every_documented_compose_up_sets_the_container_uid_and_gid() -> None:
+    """Without JDAD_UID/JDAD_GID, compose runs the container as 1000:1000, which may not
+    be able to read the 0400 token file or the TLS key (update-docker.sh exports both)."""
+    seen = 0
+    for path in _doc_files():
+        for block in _FENCE_RE.findall(path.read_text()):
+            exported: set[str] = set()
+            for line in block.splitlines():
+                exported |= set(re.findall(r"\bexport (JDAD_[UG]ID)=", line))
+                if _COMPOSE_UP_RE.search(line):
+                    seen += 1
+                    have = exported | set(re.findall(r"\b(JDAD_[UG]ID)=", line))
+                    assert {"JDAD_UID", "JDAD_GID"} <= have, f"{path.name}: {line.strip()}"
+    assert seen >= 2  # the first install and the manual rollback
+
+
+_ROLLBACK_BLOCK_RE = re.compile(r"^\*\*Manual rollback\*\*[^\n]*\n\n```bash\n(.*?)^```", re.MULTILINE | re.DOTALL)
+
+
+def test_readme_documents_the_manual_rollback() -> None:
+    """Every step is a command in the code block itself: the prose around it and the
+    block's own comments don't count (Checker on #37)."""
+    match = _ROLLBACK_BLOCK_RE.search((REPO_ROOT / "README.md").read_text())
+    assert match, "no bash block right after the Manual rollback paragraph"
+    commands = re.sub(r"(^|\s)#.*$", "", match.group(1), flags=re.MULTILINE)
+    for step in (
+        "jdad:previous",
+        "io.jdad.token-file",
+        "--no-build --force-recreate",
+        "curl -fsS https://jdad-mcp.jondevs.com/healthz",
+        "git reset -q --keep",
+        "failed-sha",
+    ):
+        assert step in commands, step

@@ -220,3 +220,25 @@ def test_citations_keep_their_item_numbers() -> None:
     sourced = [c for c in cites if c != "KB addition"]
     assert sourced and all(re.search(r" #\d+(, #\d+)*$", c) for c in sourced), sourced[:3]
     assert len(set(sourced)) == len(sourced), "two rules cite the same item"
+
+
+# ---- Checker's #36 follow-ups (JON-1366): item lists on checklist lines ----
+
+
+@pytest.mark.parametrize(
+    ("citation", "shown"),
+    [
+        ("(src: guide #2, #3)", "#2, #3"),  # both items kept, not just the first
+        ("(src: guide #1,#3)", "#1, #3"),  # spacing normalised
+        ("(src: guide #01)", "#1"),  # leading zero dropped
+        ("(src: guide  #2 ,  #5)", "#2, #5"),
+    ],
+)
+def test_cited_item_lists_are_kept_and_normalised(tmp_path: Path, citation: str, shown: str) -> None:
+    (tmp_path / "practices").mkdir()
+    (tmp_path / "sources").mkdir()
+    (tmp_path / "sources" / "2026-01-02-guide.md").write_text((FIXTURE / "sources" / "2026-01-02-guide.md").read_text())
+    (tmp_path / "practices" / "p.md").write_text(f"# P\n## A [db]\n- Index filters. {citation} {{#p.a.index}}\n")
+    assert lint_kb(tmp_path) == []
+    line = items(KnowledgeBase(tmp_path).get_checklist(["db"]))[0]
+    assert line == f"- [ ] p.a.index: Index filters. (https://example.com/guide {shown})"
