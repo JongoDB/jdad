@@ -329,6 +329,20 @@ Later updates (idempotent; fails loudly; rolls back to the previous image if hea
 
 Before touching the running container it checks that `JDAD_UID` isn't 0; that the token file exists, isn't a symlink, is owned by the deploy uid, has no group or other permission bits and isn't empty; that the env file exists and no longer sets `JDAD_TOKEN`; that the certificate is a readable, unexpired PEM whose public key matches the private key (`openssl x509 -pubkey` vs `openssl pkey -pubout`); and that the key has no group or other permission bits. Then it sets `JDAD_GIT_SHA` from `git rev-parse HEAD`, does `git pull --ff-only`, `docker compose up -d --build`, and probes `/healthz` on the published port (443 in production) with `curl --cacert <origin.crt> --resolve jdad-mcp.jondevs.com:<port>:127.0.0.1`: the origin certificate must verify for the public name (no `-k`), and the body must be `{"status":"ok"}`. A wrong, expired or mismatched certificate fails the update and triggers the rollback. A rollback to an image from before the token file gets `JDAD_TOKEN` from the token file (see "Rolling back across the migration"). `JDAD_HEALTH_HOST` overrides the name. After a healthy update it prunes old `jdad:<sha>` images, keeping the current one and the previous one (also tagged `jdad:previous`) for rollback.
 
+**Manual rollback** after a deploy that passes `/healthz` but fails a later check (a tool or resource returns the wrong thing). The script only rolls back by itself when `/healthz` fails. Run this as the deploy user, never as root, in the checkout:
+
+```bash
+new=$(git rev-parse HEAD)
+prev=$(docker image inspect -f '{{range .Config.Env}}{{println .}}{{end}}' jdad:previous | sed -n 's/^JDAD_GIT_SHA=//p')
+docker image inspect -f '{{ index .Config.Labels "io.jdad.token-file" }}' jdad:previous   # must print 1; if not, stop and ask Jon
+JDAD_UID=$(id -u) JDAD_GID=$(id -g) JDAD_GIT_SHA="$prev" docker compose -p jdad -f deploy/docker-compose.yml up -d --no-build --force-recreate
+curl -fsS https://jdad-mcp.jondevs.com/healthz                  # {"status":"ok"}
+git reset -q --keep "$prev"                                      # files on disk match the running image
+printf '%s\n' "$new" > ~/.config/jdad/failed-sha                 # the next update-docker.sh refuses $new
+```
+
+These are the steps `update-docker.sh`'s own rollback takes. `JDAD_UID`/`JDAD_GID` matter: without them, compose runs the container as 1000:1000, and it may not be able to read the 0400 token file or the TLS key. Reconnect MCP clients afterwards, check that `kb_version` shows `$prev`, and delete `~/.config/jdad/failed-sha` once a fixed `main` is ready.
+
 `JDAD_ALLOWED_HOSTS` entries are lowercased, and wildcard entries such as `*` or `*.jondevs.com` are rejected at startup. Public hosts get `https://` origins only; `http://` origins are allowed for loopback.
 
 ### Operations

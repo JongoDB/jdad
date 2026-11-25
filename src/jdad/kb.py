@@ -246,7 +246,9 @@ class Rule:
         if self.origin == "kb-addition":
             cite = "KB addition"
         elif url and items:
-            cite = f"{url} {items.group(1)}"  # one URL per source; the item tells rules apart
+            # One URL per source; the items tell rules apart. `#1,#3` and `#01` print as `#1, #3` and `#1`.
+            numbers = ", ".join(f"#{int(n)}" for n in re.findall(r"\d+", items.group(1)))
+            cite = f"{url} {numbers}"
         else:
             cite = self.citation or url or "no citation"
         return f"- [ ] {self.id or '(no id)'}: {text} ({cite})"
