@@ -1,12 +1,20 @@
 {
   "name": "jdad",
   "displayName": "JDAD",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Jon's agentic-dev knowledge base (JDAD): practices, skills, and a hosted MCP server for planning and review.",
   "author": {
     "name": "Jon Rannabargar",
     "url": "https://github.com/JongoDB"
   },
   "repository": "https://github.com/JongoDB/jdad",
-  "keywords": ["knowledge-base", "mcp", "performance", "practices"]
+  "keywords": ["knowledge-base", "mcp", "performance", "practices"],
+  "userConfig": {
+    "jdad_token": {
+      "type": "string",
+      "title": "JDAD token",
+      "description": "Bearer token for the hosted JDAD MCP server (https://jdad-mcp.jondevs.com/mcp). Ask Daisy for it. Stored in your OS credential store, never in settings.json.",
+      "sensitive": true
+    }
+  }
 }

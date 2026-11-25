@@ -173,10 +173,11 @@ Goal: richer, still read-only and offline tools. ([ADR 0003](docs/adr/0003-stdio
   - Deliverables: track the Python SDK's support for the stateless revision (`server/discover`, no `initialize`); upgrade when released; a 10-task tool-use eval (agent asked KB questions; graded on correct tool and rule ID).
   - Acceptance: `docs/research/open-standards.md` has a matrix row per pinned SDK version with pass/fail for `initialize` and `server/discover`; the server doesn't switch protocol revisions while any target client row fails; 10 labeled KB tasks are committed, and the eval shows ≥ 9 correct tool choices and ≥ 9 correct rule IDs.
   - Depends on: P3.1.
-- [ ] **P3.7 Token UX via plugin `userConfig`**
+- [x] **P3.7 Token UX via plugin `userConfig`**
   - Deliverables: Claude plugin `userConfig.jdad_token` with `sensitive: true`, used in the MCP header; README update; env-var path kept as fallback.
   - Acceptance: `claude plugin validate .` exits 0. Runtime: with an ephemeral, local-only test token (generated for the run, never a real JDAD token), a local server shows 200 for the prompted token and 401 for a missing or wrong token; the PR shows a transcript with the token redacted; `grep` for the token value over server logs and the PR body finds nothing; the test token is then destroyed. Without a Claude CLI the item stays open as runtime unverified.
   - Depends on: P0.3.
+  - Evidence (2026-11-24, JON-1345, PR #15, approved by Jon 10:12 AM ET): `userConfig.jdad_token` (`sensitive: true`) and `.mcp.json` sending `Bearer ${user_config.jdad_token}`; `claude plugin validate .` passes. `tests/test_plugin_userconfig_runtime.sh` (opt-in, throwaway containers, ephemeral token) on Claude Code 2.1.330 and 2.1.331: unset and wrong tokens get 401, the configured token 200, the value isn't in `settings.json`, the server logs or the output. The env-var fallback can't live in the plugin (`${user_config.x:-${VAR}}` fails to load), so it's a documented user-scope `jdad-env` entry, also tested. Breaking for plugin users who relied on `JDAD_TOKEN`: version 0.8.0.
 
 ## Phase 4: Harness templates and `jdad init`
 
