@@ -185,8 +185,21 @@ def test_every_documented_compose_up_sets_the_container_uid_and_gid() -> None:
     assert seen >= 2  # the first install and the manual rollback
 
 
+_ROLLBACK_BLOCK_RE = re.compile(r"^\*\*Manual rollback\*\*[^\n]*\n\n```bash\n(.*?)^```", re.MULTILINE | re.DOTALL)
+
+
 def test_readme_documents_the_manual_rollback() -> None:
-    text = (REPO_ROOT / "README.md").read_text()
-    section = text.split("**Manual rollback**", 1)[1].split("\n\n", 1)[1].split("\n### ", 1)[0]
-    for step in ("jdad:previous", "--no-build --force-recreate", "git reset -q --keep", "failed-sha", "io.jdad.token-file"):
-        assert step in section, step
+    """Every step is a command in the code block itself: the prose around it and the
+    block's own comments don't count (Checker on #37)."""
+    match = _ROLLBACK_BLOCK_RE.search((REPO_ROOT / "README.md").read_text())
+    assert match, "no bash block right after the Manual rollback paragraph"
+    commands = re.sub(r"(^|\s)#.*$", "", match.group(1), flags=re.MULTILINE)
+    for step in (
+        "jdad:previous",
+        "io.jdad.token-file",
+        "--no-build --force-recreate",
+        "curl -fsS https://jdad-mcp.jondevs.com/healthz",
+        "git reset -q --keep",
+        "failed-sha",
+    ):
+        assert step in commands, step
