@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -21,6 +22,10 @@ def test_marketplace_and_plugin_manifests() -> None:
     assert server["headers"]["Authorization"] == "Bearer ${user_config.jdad_token}"
     # The token is a sensitive plugin option (roadmap P3.7): masked, kept in
     # the OS credential store, never a literal in the repo.
+    # The token is the only plugin option, and .mcp.json uses exactly the declared
+    # ones: an undeclared ${user_config.x} would be sent as literal text (JON-1393 item 1).
+    assert set(plugin["userConfig"]) == {"jdad_token"}
+    assert set(re.findall(r"\$\{user_config\.([^}]*)\}", (REPO_ROOT / ".mcp.json").read_text())) == set(plugin["userConfig"])
     option = plugin["userConfig"]["jdad_token"]
     assert option["type"] == "string"
     assert option["sensitive"] is True
