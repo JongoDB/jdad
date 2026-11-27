@@ -3,14 +3,22 @@ a rubric and a findings format. The server does no model calls; the agent review
 
 from __future__ import annotations
 
+import logging
 import re
+import shutil
 from pathlib import Path
 
 import pytest
 from mcp import Client
 
 from jdad.kb import KNOWN_TAGS, KnowledgeBase
-from jdad.review import FINDING_FIELDS, SEVERITIES, build_review, infer_tags
+from jdad.review import (
+    FINDING_FIELDS,
+    SEVERITIES,
+    UnknownTagError,
+    build_review,
+    infer_tags,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "review"
@@ -62,9 +70,82 @@ def test_each_file_set_infers_its_tag(tag: str) -> None:
         ("DOCKERFILE.prod", {"infra"}),
         ("Migrations/0001.SQL", {"db"}),
         ("deploy/update.sh", {"infra"}),
+        # Checker on #38 (JON-1393 item 10): CI, compose, Terraform, test dirs, .css, models/
+        (".gitlab-ci.yml", {"ci"}),
+        (".circleci/config.yml", {"ci"}),
+        (".github/ISSUE_TEMPLATE/bug.md", set()),  # .github/ alone is not CI
+        ("ci/workflows/build.yml", set()),  # workflows/ alone is not CI
+        ("compose.yaml", {"infra"}),
+        ("docker-compose.prod.yml", {"infra"}),
+        ("main.tf", {"infra"}),
+        ("prod.tfvars", {"infra"}),
+        ("terraform/variables.json", {"infra"}),
+        ("nginx.conf", {"infra"}),
+        ("Procfile", {"infra"}),
+        ("tests/fixtures/data.json", {"testing"}),
+        ("test/helpers.rb", {"backend", "testing"}),
+        ("src/__tests__/Button.jsx", {"frontend", "testing"}),
+        ("pkg/handler_test.go", {"backend", "testing"}),
+        ("web/app.spec.ts", {"frontend", "testing"}),
+        ("styles/site.css", {"frontend"}),
+        ("app/models/user.rb", {"backend", "db"}),
+        ("prisma/schema.prisma", {"db"}),
     ],
 )
 def test_path_rules(path: str, tags: set[str]) -> None:
+    assert set(infer_tags([path])) == tags
+
+
+# Every entry of the path-rule tables, written out (Checker on #38, JON-1393 item 13: the
+# mutation pass's survivors were mostly table entries no test named). A path for each
+# entry must infer its tag, and the tables must hold exactly these entries, so an entry
+# added to review.py without a line here fails.
+TABLE_SPEC = {
+    "_FRONTEND_EXT": (["frontend"], "src/file{}", [".tsx", ".jsx", ".vue", ".svelte", ".css", ".scss", ".sass", ".less", ".html"]),
+    "_BACKEND_EXT": (["backend"], "src/file{}", [".py", ".go", ".rb", ".java", ".kt", ".rs", ".php", ".cs", ".ex", ".exs"]),
+    "_FRONTEND_DIRS": (["frontend"], "{}/file.ts", ["components", "pages", "app", "ui", "public", "frontend", "web"]),
+    "_BACKEND_DIRS": (["backend"], "{}/file.ts", ["api", "server", "routes", "handlers", "backend", "services"]),
+    "_DB_DIRS": (["db"], "{}/file.txt", ["migrations", "alembic", "models", "db", "database"]),
+    "_INFRA_DIRS": (["infra"], "{}/file.txt", ["deploy", "k8s", "kubernetes", "helm", "terraform", "infra", "ansible"]),
+    "_LOCKFILES": (
+        ["supply-chain"],
+        "{}",
+        ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock", "Pipfile.lock",
+         "pyproject.toml", "go.mod", "go.sum", "Cargo.toml", "Cargo.lock", "Gemfile", "Gemfile.lock"],
+    ),
+}  # fmt: skip
+TABLE_CASES = [(table, template.format(entry), tags) for table, (tags, template, entries) in TABLE_SPEC.items() for entry in entries]
+# A .ts/.js/.mjs/.cjs file is frontend under a frontend dir and backend under a backend dir.
+SCRIPT_EXT = [".ts", ".js", ".mjs", ".cjs"]
+TABLE_CASES += [("_SCRIPT_EXT", f"components/file{ext}", ["frontend"]) for ext in SCRIPT_EXT]
+TABLE_CASES += [("_SCRIPT_EXT", f"api/file{ext}", ["backend"]) for ext in SCRIPT_EXT]
+
+
+@pytest.mark.parametrize(("table", "path", "tags"), TABLE_CASES, ids=[c[1] for c in TABLE_CASES])
+def test_every_table_entry_infers_its_tag(table: str, path: str, tags: list[str]) -> None:
+    assert sorted(infer_tags([path])) == tags
+
+
+def test_the_tables_hold_exactly_the_tested_entries() -> None:
+    from jdad import review
+
+    for table, (_tags, _template, entries) in TABLE_SPEC.items():
+        assert getattr(review, table) == {e.lower() for e in entries}, table
+    assert review._SCRIPT_EXT == set(SCRIPT_EXT)
+
+
+@pytest.mark.parametrize(
+    ("path", "tags"),
+    [
+        ("  api/x.py ", {"backend"}),  # surrounding spaces are stripped
+        ("deploy\\run.sh", {"infra"}),  # Windows separators count as /
+        ("notes/models", set()),  # a file named like a directory is not that directory
+        ("docs/nginx-notes.md", set()),  # nginx*.conf only
+        ("test_api.py", {"backend", "testing"}),  # test_ name outside a tests/ dir
+        ("requirements.txt.bak", set()),  # requirements*.txt, nothing after
+    ],
+)
+def test_path_normalisation_and_name_rules(path: str, tags: set[str]) -> None:
     assert set(infer_tags([path])) == tags
 
 
@@ -112,8 +193,14 @@ def test_passed_tags_are_added_to_inferred_ones() -> None:
     assert review["inferred_from"] == {"backend": ["api/x.py"]}
 
 
+def test_blank_files_and_tags_are_dropped() -> None:
+    review = build_review(KnowledgeBase(FIXTURE), ["", "  ", "api/x.py"], "x", tags=["", " ", "ci"])
+    assert review["changed_files"] == ["api/x.py"]
+    assert review["tags"] == ["backend", "ci"]
+
+
 def test_an_unknown_tag_is_an_error_that_names_it() -> None:
-    with pytest.raises(ValueError, match="'frontnd'"):
+    with pytest.raises(UnknownTagError, match="'frontnd'"):
         build_review(KnowledgeBase(FIXTURE), ["api/x.py"], "x", tags=["frontnd"])
 
 
@@ -121,6 +208,20 @@ def test_no_tags_means_no_rules_and_a_note() -> None:
     review = build_review(KnowledgeBase(FIXTURE), ["README.md"], "docs only")
     assert review["tags"] == [] and review["checklist"] == "" and review["relevant"] == []
     assert "tags" in review["note"]
+    assert all(tag in review["note"] for tag in KNOWN_TAGS), review["note"]
+
+
+def test_a_blank_summary_gets_no_relevant_hits() -> None:
+    review = build_review(KnowledgeBase(FIXTURE), ["api/x.py"], "   ")
+    assert review["summary"] == "" and review["relevant"] == []
+    assert "rev.backend.timeouts" in review["checklist"]
+
+
+def test_relevant_hits_carry_id_heading_and_snippet() -> None:
+    review = build_review(KnowledgeBase(FIXTURE), ["api/x.py"], "timeout on outbound calls")
+    hit = review["relevant"][0]
+    assert set(hit) == {"id", "heading", "snippet"}
+    assert hit["id"] == "rev.backend.timeouts" and hit["heading"] and "timeout" in hit["snippet"].lower()
 
 
 def test_relevant_hits_come_from_the_summary_within_the_tags() -> None:
@@ -144,6 +245,7 @@ def test_rubric_puts_correctness_first_and_skips_style() -> None:
     assert "correctness" in rubric[0].lower()
     assert "skip style" in text
     assert "evidence" in text and "no findings" in text
+    assert "applies when" in text and "rule id" in text
 
 
 def test_findings_format_has_the_four_fields() -> None:
@@ -153,6 +255,7 @@ def test_findings_format_has_the_four_fields() -> None:
     assert fmt["severity"] == list(SEVERITIES) == ["blocker", "major", "minor"]
     example = fmt["example"]
     assert all(f"{field}:" in example for field in ("rule", "file", "evidence", "severity"))
+    assert "`correctness`" in fmt["note"]
 
 
 def test_review_echoes_the_summary_and_pins_the_kb_version() -> None:
@@ -160,6 +263,17 @@ def test_review_echoes_the_summary_and_pins_the_kb_version() -> None:
     assert review["summary"] == "add retries"
     assert review["changed_files"] == ["api/x.py"]
     assert "kb_version" in review
+
+
+def test_review_kb_version_is_the_sha_and_newest_entry_date(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Checker on #38 (JON-1393 item 11): the value, not just the key."""
+    root = tmp_path / "kb"
+    shutil.copytree(FIXTURE, root)
+    (root / "sources" / "2026-03-04-retries.md").write_text("---\ntitle: x\n---\n")
+    (root / "sources" / "2026-01-02-older.md").write_text("---\ntitle: x\n---\n")
+    monkeypatch.setenv("JDAD_GIT_SHA", "0123abcdef")
+    review = build_review(KnowledgeBase(root), ["api/x.py"], "add retries")
+    assert review["kb_version"] == "0123abcdef (2026-03-04)"
 
 
 # ---- the MCP tool, the prompt and /jdad review ----
@@ -177,6 +291,38 @@ async def test_the_tool_is_read_only_and_returns_the_bundle(client: Client, monk
     assert data["tags"] == ["db"] and "rev.db.index" in data["checklist"]
     result = await client.call_tool("review_against_kb", {"changed_files": ["a.sql"], "summary": "x", "tags": ["ci"]})
     assert result.structured_content["tags"] == ["ci", "db"]
+
+
+@pytest.mark.anyio
+async def test_an_unknown_tag_reaches_the_client_named_and_logs_no_traceback(
+    client: Client, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Checker on #38 (JON-1393 item 9): the client saw only "Error executing tool
+    review_against_kb" and the server logged a traceback."""
+    monkeypatch.setenv("KB_ROOT", str(FIXTURE))
+    with caplog.at_level(logging.INFO, logger="mcp.server.mcpserver.server"):
+        result = await client.call_tool("review_against_kb", {"changed_files": ["a.sql"], "summary": "x", "tags": ["frontnd"]})
+    assert result.is_error
+    text = result.content[0].text
+    assert "'frontnd'" in text and all(tag in text for tag in KNOWN_TAGS), text
+    assert not [r for r in caplog.records if r.exc_info or r.levelno >= logging.ERROR]
+    assert any("frontnd" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_only_an_unknown_tag_is_passed_through_other_errors_stay_generic(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Any other failure is still a crash: its text stays on the server."""
+    from jdad import server
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("internal detail")
+
+    monkeypatch.setattr(server, "build_review", boom)
+    result = await client.call_tool("review_against_kb", {"changed_files": ["a.sql"], "summary": "x"})
+    assert result.is_error
+    assert result.content[0].text == "Error executing tool review_against_kb"
 
 
 @pytest.mark.anyio
