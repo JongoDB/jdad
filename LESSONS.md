@@ -73,3 +73,9 @@ Things a reviewer caught that an agent should have known (AGENTS.md R-flow-7). R
 - What happened: `tests/fixtures/review/sources/` was empty in the author's working copy. Git doesn't track empty directories, so it didn't exist in a clean clone, and 14 tests failed in GitHub's `verify` on d3e2701 after the PR had been reported ready (Checker on #38).
 - Rule: a fixture directory that must exist but has no files gets a `.gitkeep`; `tests/test_fixture_dirs.py` fails on an empty one. Before READY, check GitHub's `verify` result on the exact head, and run `./verify` in a clean clone when a PR adds files.
 - Source: https://github.com/JongoDB/jdad/pull/38 (fixed in d95229d; guard from JON-1393 item 12)
+
+## 2026-11-27: Post the plan on the card before the first code commit
+
+- What happened: #40 (JON-1393 item 14) had no plan on the Linear card. The first comment about item 14 came 17 seconds after the fix commit, so Checker failed the PR on process (R-flow-2). A retroactive plan was posted on JON-1393 afterwards.
+- Rule: for every item, including follow-ups drafted one after another on one card, post the plan (steps, risks, how each acceptance criterion is checked) on the card before the first commit for that item, test commits included. Check the comment's timestamp is earlier than the commit's.
+- Source: https://github.com/JongoDB/jdad/pull/40 (Checker verdict at 00986740)
