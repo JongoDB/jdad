@@ -241,6 +241,8 @@ async def test_stdio_entry_point_serves_performance_content(newest_entry: str) -
             await stdio_client.call_tool("review_against_kb", {"changed_files": ["migrations/1.sql"], "summary": "add an index"})
         )
         assert review["tags"] == ["db"] and "perf.db.index-filters" in review["checklist"]
+        bad = await stdio_client.call_tool("review_against_kb", {"changed_files": ["a.sql"], "summary": "x", "tags": ["frontnd"]})
+        assert bad.is_error and "'frontnd'" in bad.content[0].text
 
 
 def _free_port() -> int:

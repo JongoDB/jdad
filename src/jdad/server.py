@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 from starlette.requests import Request
@@ -18,7 +19,7 @@ from starlette.responses import JSONResponse, Response
 
 from jdad import __version__
 from jdad.kb import KnowledgeBase
-from jdad.review import FINDING_FIELDS, build_review
+from jdad.review import FINDING_FIELDS, UnknownTagError, build_review
 
 logger = logging.getLogger("jdad")
 
@@ -128,7 +129,11 @@ def review_against_kb(changed_files: list[str], summary: str, tags: list[str] | 
     (correctness first, skip style) and `findings_format`: report each finding as rule_id, file,
     evidence, severity. With no tags at all it returns no rules and a `note`.
     """
-    return build_review(_kb(), changed_files, summary, tags)
+    try:
+        return build_review(_kb(), changed_files, summary, tags)
+    except UnknownTagError as exc:
+        # The caller's mistake: send the message naming the tag, not a crash (JON-1393).
+        raise ToolError(str(exc)) from exc
 
 
 @mcp.tool(annotations=READ_ONLY)

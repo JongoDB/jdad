@@ -3,14 +3,16 @@ a rubric and a findings format. The server does no model calls; the agent review
 
 from __future__ import annotations
 
+import logging
 import re
+import shutil
 from pathlib import Path
 
 import pytest
 from mcp import Client
 
 from jdad.kb import KNOWN_TAGS, KnowledgeBase
-from jdad.review import FINDING_FIELDS, SEVERITIES, build_review, infer_tags
+from jdad.review import FINDING_FIELDS, SEVERITIES, UnknownTagError, build_review, infer_tags
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "review"
@@ -62,6 +64,26 @@ def test_each_file_set_infers_its_tag(tag: str) -> None:
         ("DOCKERFILE.prod", {"infra"}),
         ("Migrations/0001.SQL", {"db"}),
         ("deploy/update.sh", {"infra"}),
+        # Checker on #38 (JON-1393 item 10): CI, compose, Terraform, test dirs, .css, models/
+        (".gitlab-ci.yml", {"ci"}),
+        (".circleci/config.yml", {"ci"}),
+        (".github/ISSUE_TEMPLATE/bug.md", set()),  # .github/ alone is not CI
+        ("ci/workflows/build.yml", set()),  # workflows/ alone is not CI
+        ("compose.yaml", {"infra"}),
+        ("docker-compose.prod.yml", {"infra"}),
+        ("main.tf", {"infra"}),
+        ("prod.tfvars", {"infra"}),
+        ("terraform/variables.json", {"infra"}),
+        ("nginx.conf", {"infra"}),
+        ("Procfile", {"infra"}),
+        ("tests/fixtures/data.json", {"testing"}),
+        ("test/helpers.rb", {"backend", "testing"}),
+        ("src/__tests__/Button.jsx", {"frontend", "testing"}),
+        ("pkg/handler_test.go", {"backend", "testing"}),
+        ("web/app.spec.ts", {"frontend", "testing"}),
+        ("styles/site.css", {"frontend"}),
+        ("app/models/user.rb", {"backend", "db"}),
+        ("prisma/schema.prisma", {"db"}),
     ],
 )
 def test_path_rules(path: str, tags: set[str]) -> None:
@@ -113,7 +135,7 @@ def test_passed_tags_are_added_to_inferred_ones() -> None:
 
 
 def test_an_unknown_tag_is_an_error_that_names_it() -> None:
-    with pytest.raises(ValueError, match="'frontnd'"):
+    with pytest.raises(UnknownTagError, match="'frontnd'"):
         build_review(KnowledgeBase(FIXTURE), ["api/x.py"], "x", tags=["frontnd"])
 
 
@@ -162,6 +184,17 @@ def test_review_echoes_the_summary_and_pins_the_kb_version() -> None:
     assert "kb_version" in review
 
 
+def test_review_kb_version_is_the_sha_and_newest_entry_date(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Checker on #38 (JON-1393 item 11): the value, not just the key."""
+    root = tmp_path / "kb"
+    shutil.copytree(FIXTURE, root)
+    (root / "sources" / "2026-03-04-retries.md").write_text("---\ntitle: x\n---\n")
+    (root / "sources" / "2026-01-02-older.md").write_text("---\ntitle: x\n---\n")
+    monkeypatch.setenv("JDAD_GIT_SHA", "0123abcdef")
+    review = build_review(KnowledgeBase(root), ["api/x.py"], "add retries")
+    assert review["kb_version"] == "0123abcdef (2026-03-04)"
+
+
 # ---- the MCP tool, the prompt and /jdad review ----
 
 
@@ -177,6 +210,22 @@ async def test_the_tool_is_read_only_and_returns_the_bundle(client: Client, monk
     assert data["tags"] == ["db"] and "rev.db.index" in data["checklist"]
     result = await client.call_tool("review_against_kb", {"changed_files": ["a.sql"], "summary": "x", "tags": ["ci"]})
     assert result.structured_content["tags"] == ["ci", "db"]
+
+
+@pytest.mark.anyio
+async def test_an_unknown_tag_reaches_the_client_named_and_logs_no_traceback(
+    client: Client, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Checker on #38 (JON-1393 item 9): the client saw only "Error executing tool
+    review_against_kb" and the server logged a traceback."""
+    monkeypatch.setenv("KB_ROOT", str(FIXTURE))
+    with caplog.at_level(logging.INFO, logger="mcp.server.mcpserver.server"):
+        result = await client.call_tool("review_against_kb", {"changed_files": ["a.sql"], "summary": "x", "tags": ["frontnd"]})
+    assert result.is_error
+    text = result.content[0].text
+    assert "'frontnd'" in text and all(tag in text for tag in KNOWN_TAGS), text
+    assert not [r for r in caplog.records if r.exc_info or r.levelno >= logging.ERROR]
+    assert any("frontnd" in r.getMessage() for r in caplog.records)
 
 
 @pytest.mark.anyio

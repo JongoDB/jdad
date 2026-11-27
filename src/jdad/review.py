@@ -35,6 +35,10 @@ _REQUIREMENTS_RE = re.compile(r"^requirements[\w.-]*\.txt$")
 _COMPOSE_RE = re.compile(r"^(docker-)?compose[\w.-]*\.ya?ml$")
 
 
+class UnknownTagError(ValueError):
+    """A passed tag isn't one of KNOWN_TAGS. The server sends this message to the client."""
+
+
 def _tags_for(path: str) -> list[str]:
     p = PurePosixPath(path.strip().replace("\\", "/").lower())
     name, suffix, dirs = p.name, p.suffix, set(p.parts[:-1])
@@ -96,7 +100,7 @@ def build_review(
     passed = [t.strip().lower() for t in (tags or []) if t and t.strip()]
     unknown = [t for t in passed if t not in KNOWN_TAGS]
     if unknown:
-        raise ValueError(f"unknown tag(s) {', '.join(repr(t) for t in unknown)}: use {', '.join(KNOWN_TAGS)}")
+        raise UnknownTagError(f"unknown tag(s) {', '.join(repr(t) for t in unknown)}: use {', '.join(KNOWN_TAGS)}")
     wanted = sorted(set(inferred) | set(passed))
     review: dict[str, Any] = {
         "summary": summary.strip(),
