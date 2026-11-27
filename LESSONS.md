@@ -67,3 +67,9 @@ Things a reviewer caught that an agent should have known (AGENTS.md R-flow-7). R
 - What happened: Checker batch 14 passed six stacked PRs, and Daisy merged them in order. Only #20 reached `main`. #21, #17, #22, #23 and #24 each merged into the branch below, because their bases were never retargeted after #20 landed; their bodies only said "I'll retarget as they land". Landing them took an extra PR (#30) and another Checker pass.
 - Rule: before writing a READY line, check each PR's base with `gh pr view N --json baseRefName`. If it isn't `main`, retarget it once the PR below has merged, or say in the READY line that it's stacked and on what. After each merge in a stack, retarget the next PR straight away.
 - Source: https://github.com/JongoDB/jdad/pull/30 (Daisy, brief after Checker batch 14; JON-1348 note of 17:37 ET)
+
+## 2026-11-27: Empty fixture directories pass locally and fail in CI
+
+- What happened: `tests/fixtures/review/sources/` was empty in the author's working copy. Git doesn't track empty directories, so it didn't exist in a clean clone, and 14 tests failed in GitHub's `verify` on d3e2701 after the PR had been reported ready (Checker on #38).
+- Rule: a fixture directory that must exist but has no files gets a `.gitkeep`; `tests/test_fixture_dirs.py` fails on an empty one. Before READY, check GitHub's `verify` result on the exact head, and run `./verify` in a clean clone when a PR adds files.
+- Source: https://github.com/JongoDB/jdad/pull/38 (fixed in d95229d; guard from JON-1393 item 12)
