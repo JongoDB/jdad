@@ -12,7 +12,13 @@ import pytest
 from mcp import Client
 
 from jdad.kb import KNOWN_TAGS, KnowledgeBase
-from jdad.review import FINDING_FIELDS, SEVERITIES, UnknownTagError, build_review, infer_tags
+from jdad.review import (
+    FINDING_FIELDS,
+    SEVERITIES,
+    UnknownTagError,
+    build_review,
+    infer_tags,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = REPO_ROOT / "tests" / "fixtures" / "review"
