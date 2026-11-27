@@ -134,6 +134,21 @@ def test_the_tables_hold_exactly_the_tested_entries() -> None:
     assert review._SCRIPT_EXT == set(SCRIPT_EXT)
 
 
+@pytest.mark.parametrize(
+    ("path", "tags"),
+    [
+        ("  api/x.py ", {"backend"}),  # surrounding spaces are stripped
+        ("deploy\\run.sh", {"infra"}),  # Windows separators count as /
+        ("notes/models", set()),  # a file named like a directory is not that directory
+        ("docs/nginx-notes.md", set()),  # nginx*.conf only
+        ("test_api.py", {"backend", "testing"}),  # test_ name outside a tests/ dir
+        ("requirements.txt.bak", set()),  # requirements*.txt, nothing after
+    ],
+)
+def test_path_normalisation_and_name_rules(path: str, tags: set[str]) -> None:
+    assert set(infer_tags([path])) == tags
+
+
 def test_inference_keeps_each_tags_files_in_input_order() -> None:
     files = ["b.sql", "x.md", "a.sql", "api/x.py"]
     assert infer_tags(files) == {"db": ["b.sql", "a.sql"], "backend": ["api/x.py"]}
@@ -178,6 +193,12 @@ def test_passed_tags_are_added_to_inferred_ones() -> None:
     assert review["inferred_from"] == {"backend": ["api/x.py"]}
 
 
+def test_blank_files_and_tags_are_dropped() -> None:
+    review = build_review(KnowledgeBase(FIXTURE), ["", "  ", "api/x.py"], "x", tags=["", " ", "ci"])
+    assert review["changed_files"] == ["api/x.py"]
+    assert review["tags"] == ["backend", "ci"]
+
+
 def test_an_unknown_tag_is_an_error_that_names_it() -> None:
     with pytest.raises(UnknownTagError, match="'frontnd'"):
         build_review(KnowledgeBase(FIXTURE), ["api/x.py"], "x", tags=["frontnd"])
@@ -187,6 +208,20 @@ def test_no_tags_means_no_rules_and_a_note() -> None:
     review = build_review(KnowledgeBase(FIXTURE), ["README.md"], "docs only")
     assert review["tags"] == [] and review["checklist"] == "" and review["relevant"] == []
     assert "tags" in review["note"]
+    assert all(tag in review["note"] for tag in KNOWN_TAGS), review["note"]
+
+
+def test_a_blank_summary_gets_no_relevant_hits() -> None:
+    review = build_review(KnowledgeBase(FIXTURE), ["api/x.py"], "   ")
+    assert review["summary"] == "" and review["relevant"] == []
+    assert "rev.backend.timeouts" in review["checklist"]
+
+
+def test_relevant_hits_carry_id_heading_and_snippet() -> None:
+    review = build_review(KnowledgeBase(FIXTURE), ["api/x.py"], "timeout on outbound calls")
+    hit = review["relevant"][0]
+    assert set(hit) == {"id", "heading", "snippet"}
+    assert hit["id"] == "rev.backend.timeouts" and hit["heading"] and "timeout" in hit["snippet"].lower()
 
 
 def test_relevant_hits_come_from_the_summary_within_the_tags() -> None:
@@ -210,6 +245,7 @@ def test_rubric_puts_correctness_first_and_skips_style() -> None:
     assert "correctness" in rubric[0].lower()
     assert "skip style" in text
     assert "evidence" in text and "no findings" in text
+    assert "applies when" in text and "rule id" in text
 
 
 def test_findings_format_has_the_four_fields() -> None:
@@ -219,6 +255,7 @@ def test_findings_format_has_the_four_fields() -> None:
     assert fmt["severity"] == list(SEVERITIES) == ["blocker", "major", "minor"]
     example = fmt["example"]
     assert all(f"{field}:" in example for field in ("rule", "file", "evidence", "severity"))
+    assert "`correctness`" in fmt["note"]
 
 
 def test_review_echoes_the_summary_and_pins_the_kb_version() -> None:
@@ -270,6 +307,22 @@ async def test_an_unknown_tag_reaches_the_client_named_and_logs_no_traceback(
     assert "'frontnd'" in text and all(tag in text for tag in KNOWN_TAGS), text
     assert not [r for r in caplog.records if r.exc_info or r.levelno >= logging.ERROR]
     assert any("frontnd" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.anyio
+async def test_only_an_unknown_tag_is_passed_through_other_errors_stay_generic(
+    client: Client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Any other failure is still a crash: its text stays on the server."""
+    from jdad import server
+
+    def boom(*_args: object, **_kwargs: object) -> None:
+        raise ValueError("internal detail")
+
+    monkeypatch.setattr(server, "build_review", boom)
+    result = await client.call_tool("review_against_kb", {"changed_files": ["a.sql"], "summary": "x"})
+    assert result.is_error
+    assert result.content[0].text == "Error executing tool review_against_kb"
 
 
 @pytest.mark.anyio
