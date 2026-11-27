@@ -96,6 +96,44 @@ def test_path_rules(path: str, tags: set[str]) -> None:
     assert set(infer_tags([path])) == tags
 
 
+# Every entry of the path-rule tables, written out (Checker on #38, JON-1393 item 13: the
+# mutation pass's survivors were mostly table entries no test named). A path for each
+# entry must infer its tag, and the tables must hold exactly these entries, so an entry
+# added to review.py without a line here fails.
+TABLE_SPEC = {
+    "_FRONTEND_EXT": (["frontend"], "src/file{}", [".tsx", ".jsx", ".vue", ".svelte", ".css", ".scss", ".sass", ".less", ".html"]),
+    "_BACKEND_EXT": (["backend"], "src/file{}", [".py", ".go", ".rb", ".java", ".kt", ".rs", ".php", ".cs", ".ex", ".exs"]),
+    "_FRONTEND_DIRS": (["frontend"], "{}/file.ts", ["components", "pages", "app", "ui", "public", "frontend", "web"]),
+    "_BACKEND_DIRS": (["backend"], "{}/file.ts", ["api", "server", "routes", "handlers", "backend", "services"]),
+    "_DB_DIRS": (["db"], "{}/file.txt", ["migrations", "alembic", "models", "db", "database"]),
+    "_INFRA_DIRS": (["infra"], "{}/file.txt", ["deploy", "k8s", "kubernetes", "helm", "terraform", "infra", "ansible"]),
+    "_LOCKFILES": (
+        ["supply-chain"],
+        "{}",
+        ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "uv.lock", "poetry.lock", "Pipfile.lock",
+         "pyproject.toml", "go.mod", "go.sum", "Cargo.toml", "Cargo.lock", "Gemfile", "Gemfile.lock"],
+    ),
+}  # fmt: skip
+TABLE_CASES = [(table, template.format(entry), tags) for table, (tags, template, entries) in TABLE_SPEC.items() for entry in entries]
+# A .ts/.js/.mjs/.cjs file is frontend under a frontend dir and backend under a backend dir.
+SCRIPT_EXT = [".ts", ".js", ".mjs", ".cjs"]
+TABLE_CASES += [("_SCRIPT_EXT", f"components/file{ext}", ["frontend"]) for ext in SCRIPT_EXT]
+TABLE_CASES += [("_SCRIPT_EXT", f"api/file{ext}", ["backend"]) for ext in SCRIPT_EXT]
+
+
+@pytest.mark.parametrize(("table", "path", "tags"), TABLE_CASES, ids=[c[1] for c in TABLE_CASES])
+def test_every_table_entry_infers_its_tag(table: str, path: str, tags: list[str]) -> None:
+    assert sorted(infer_tags([path])) == tags
+
+
+def test_the_tables_hold_exactly_the_tested_entries() -> None:
+    from jdad import review
+
+    for table, (_tags, _template, entries) in TABLE_SPEC.items():
+        assert getattr(review, table) == {e.lower() for e in entries}, table
+    assert review._SCRIPT_EXT == set(SCRIPT_EXT)
+
+
 def test_inference_keeps_each_tags_files_in_input_order() -> None:
     files = ["b.sql", "x.md", "a.sql", "api/x.py"]
     assert infer_tags(files) == {"db": ["b.sql", "a.sql"], "backend": ["api/x.py"]}
