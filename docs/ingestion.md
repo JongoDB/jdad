@@ -53,7 +53,7 @@ Jon's "nothing from the transcripts in the public repo" (2026-11-22) means **Cla
 `./verify` runs `jdad lint-kb`, which fails the PR when:
 
 - a frontmatter field is missing, empty or unknown; a date is malformed; the file-name date isn't `retrieved`; `items` isn't a positive integer or doesn't match the body (a `## The N items` heading, and a numbered list running exactly 1 to N when the items are numbered); `url` isn't http(s); or `cite_as` is malformed or already used;
-- a rule's `(src: <name> #n)` names no source's `cite_as`, or `n` is outside `1..items`;
+- a rule's `(src: <name> #n)` names no source's `cite_as`, `n` is outside `1..items`, or an item is cited twice (`#2, #2`);
 - any rule breaks the format in `kb-schema.md`;
 - any KB text tries to steer an agent, links or runs things in `practices/` without an allowlist entry, or hides characters or comments ([threat model](threat-model.md)).
 

@@ -54,7 +54,7 @@ A rule is a `- ` bullet at the start of a line:
 | Part | Required | Format |
 | --- | --- | --- |
 | Text | yes | One instruction. Split combined advice into separate rules so each has one ID and one citation |
-| Citation | yes | `(src: <source> #n)` or `(src: <source> #n, #m)` when it came from a source, or `(KB addition)` when it didn't (Rule zero in `CLAUDE.md`). It sets `origin`: `source` or `kb-addition`. `<source>` is a source's `cite_as`, and every `#n` must be within its `items` ([ingestion.md](ingestion.md)); the lint checks both |
+| Citation | yes | `(src: <source> #n)` or `(src: <source> #n, #m)` when it came from a source, or `(KB addition)` when it didn't (Rule zero in `CLAUDE.md`). It sets `origin`: `source` or `kb-addition`. `<source>` is a source's `cite_as`, and every `#n` must be within its `items` and appear once ([ingestion.md](ingestion.md)); the lint checks all three |
 | ID | yes | `{#<prefix>.<area>.<slug>}`: lowercase letters, digits and hyphens, at least two dot-separated segments, unique across the KB, and the same `<prefix>` for every rule in a file (`perf` for `performance.md`). IDs are permanent: don't renumber or reuse them; retire a rule by deleting it |
 | Continuation | no | Indented lines join the rule's text. The citation and ID end the rule's last text line |
 | Applies when | no | An indented `Applies when: …` line, for rules that are easy to over-apply. Shown in checklists and returned as `applies_when` |
