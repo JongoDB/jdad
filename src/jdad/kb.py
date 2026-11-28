@@ -84,6 +84,14 @@ _LINK_RE = re.compile(r"(?im)^(?:-\s*)?Link:\s*(\S+)")
 _DATE_PREFIX_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 
 
+class UnknownKbFileError(FileNotFoundError):
+    """No practice or source matches the id the caller gave (none, ambiguous or invalid).
+
+    The message names only KB file stems, so the server sends it to the client
+    (JON-1393 item 14). A file that resolves but can't be read stays a FileNotFoundError.
+    """
+
+
 def resolve_kb_root(explicit: str | Path | None = None) -> Path:
     """Locate the KB root (the directory that contains practices/ and sources/).
 
@@ -734,12 +742,12 @@ class KnowledgeBase:
 
     def _resolve_file(self, directory: Path, needle: str, *, kind: str) -> Path:
         if not needle or not str(needle).strip():
-            raise FileNotFoundError(f"No {kind} id provided")
+            raise UnknownKbFileError(f"No {kind} id provided")
         raw = str(needle).strip().replace("\\", "/")
         name = Path(raw).name
         stem = name.removesuffix(".md")
         if not stem or stem in {".", ".."}:
-            raise FileNotFoundError(f"Invalid {kind} id {needle!r}")
+            raise UnknownKbFileError(f"Invalid {kind} id {needle!r}")
 
         # Only files kb_markdown_files allows (no symlinks, nothing outside the
         # KB, nothing oversized), minus `_`-prefixed ones (templates, drafts):
@@ -758,10 +766,10 @@ class KnowledgeBase:
         available = ", ".join(path.stem for path in files) or "(none)"
         if len(matches) > 1:
             names = ", ".join(path.stem for path in matches)
-            raise FileNotFoundError(
+            raise UnknownKbFileError(
                 f"Ambiguous {kind} id {needle!r}; matches: {names}. Available: {available}"
             )
-        raise FileNotFoundError(
+        raise UnknownKbFileError(
             f"Unknown {kind} {needle!r}. Available: {available}"
         )
 

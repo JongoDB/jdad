@@ -73,3 +73,15 @@ Things a reviewer caught that an agent should have known (AGENTS.md R-flow-7). R
 - What happened: `tests/fixtures/review/sources/` was empty in the author's working copy. Git doesn't track empty directories, so it didn't exist in a clean clone, and 14 tests failed in GitHub's `verify` on d3e2701 after the PR had been reported ready (Checker on #38).
 - Rule: a fixture directory that must exist but has no files gets a `.gitkeep`; `tests/test_fixture_dirs.py` fails on an empty one. Before READY, check GitHub's `verify` result on the exact head, and run `./verify` in a clean clone when a PR adds files.
 - Source: https://github.com/JongoDB/jdad/pull/38 (fixed in d95229d; guard from JON-1393 item 12)
+
+## 2026-11-27: Reproduce "failed before the fix" from committed states
+
+- What happened: #39's body said the new tests with main's `src/` gave `2 failed, 110 passed`. That setup stops at collection with an ImportError, because the tests import the new `UnknownTagError`. The number came from a working tree mid-edit, before the rename, a state no commit has (Checker on #39; fixed in the body, no new commit).
+- Rule: commit the tests first, then reproduce the red run in a scratch clone from named SHAs ("tests at <sha>, <file> from <sha>") and copy pytest's summary line exactly.
+- Source: https://github.com/JongoDB/jdad/pull/39 (Checker verdict at e8063218)
+
+## 2026-11-27: Post the plan on the card before the first code commit
+
+- What happened: #40 (JON-1393 item 14) had no plan on the Linear card. The first comment about item 14 came 17 seconds after the fix commit, so Checker failed the PR on process (R-flow-2). A retroactive plan was posted on JON-1393 afterwards.
+- Rule: for every item, including follow-ups drafted one after another on one card, post the plan (steps, risks, how each acceptance criterion is checked) on the card before the first commit for that item, test commits included. Check the comment's timestamp is earlier than the commit's.
+- Source: https://github.com/JongoDB/jdad/pull/40 (Checker verdict at 00986740)
