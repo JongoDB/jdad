@@ -559,12 +559,32 @@ def resolve_ssl_files(
     return None, None
 
 
+def require_kb() -> Path:
+    """Resolve and load the KB root once before serving (ADR 0006).
+
+    Tools still resolve the root on every call. But a root that can't load at all
+    must stop the server here, not pass /healthz while every tool fails. Files that
+    are skipped with a warning (unreadable, oversized, symlinked) don't stop it.
+
+    Only resolve_kb_root can stop start-up: a missing root, practices/ or sources/
+    raises FileNotFoundError. `kb.practices()` just logs any skipped files once at
+    start-up; it can't raise here, since an unreadable practices/ lists as empty.
+    """
+    try:
+        kb = KnowledgeBase()
+        kb.practices()
+    except OSError as exc:  # FileNotFoundError from resolve_kb_root
+        raise SystemExit(f"jdad-mcp: the knowledge base can't load: {exc}") from None
+    return kb.root
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     if args.check:
         from jdad.check import run_check
 
         raise SystemExit(run_check())
+    require_kb()
     if args.http:
         import uvicorn
 
