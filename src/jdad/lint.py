@@ -909,6 +909,11 @@ def _citation_problem(citation: str, sources: dict[str, tuple[str, int]]) -> str
     out_of_range = [n for n in numbers if not 1 <= n <= items]
     if out_of_range:
         return f"citation '({citation})': item(s) {', '.join(f'#{n}' for n in out_of_range)} outside 1..{items} for {path}"
+    # `#2, #2` (or `#2, #02`) would be served as `#2, #2` (JON-1393 item 8). Each
+    # repeated item is named once, in the order it first appears.
+    repeated = [n for n in dict.fromkeys(numbers) if numbers.count(n) > 1]
+    if repeated:
+        return f"citation '({citation})': item(s) {', '.join(f'#{n}' for n in repeated)} cited more than once"
     return None
 
 

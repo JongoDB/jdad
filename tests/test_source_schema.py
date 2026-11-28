@@ -115,6 +115,13 @@ def test_duplicate_cite_as_fails(tmp_path: Path) -> None:
         ("(src: nosuch #1)", "no source has cite_as 'nosuch'"),
         ("(src: tips #11)", "item(s) #11 outside 1..10"),
         ("(src: tips #0, #4)", "item(s) #0 outside 1..10"),
+        # Checker on #37 (JON-1393 item 8): an item cited twice fails, so the served line can't show "#2, #2"
+        ("(src: tips #2, #2)", "item(s) #2 cited more than once"),
+        ("(src: tips #2, #3, #02)", "item(s) #2 cited more than once"),
+        ("(src: tips #4, #1, #4, #1)", "item(s) #4, #1 cited more than once"),
+        ("(src: tips #2, #2, #2)", "item(s) #2 cited more than once"),
+        ("(src: tips #4, #1, #1, #4)", "item(s) #4, #1 cited more than once"),  # first-appearance order
+        ("(src: tips #11, #11)", "item(s) #11, #11 outside 1..10"),  # the range check is reported first
         ("(src: tips)", "isn't '(src: <cite_as> #n[, #m])'"),
         ("(src: Tips #1)", "isn't '(src: <cite_as> #n[, #m])'"),
     ],
