@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import logging
 import socket
 import threading
 import time
@@ -43,6 +44,21 @@ def tool_payload(result) -> object:
         return json.loads(texts[0])
     except json.JSONDecodeError:
         return texts[0]
+
+
+INSTRUCTED = ("get_checklist", "search_practices", "review_against_kb", "kb_version", "get_source", "review-against-kb")
+
+
+@pytest.mark.anyio
+async def test_server_instructions_name_the_review_tool_and_prompt(client: Client) -> None:
+    """What clients get at initialize. No test pinned it: Checker's #38 mutant M38 dropped
+    review_against_kb and survived (JON-1393 item 17)."""
+    text = client.instructions or ""
+    missing = [name for name in INSTRUCTED if name not in text]
+    assert not missing, (missing, text)
+    tools = {tool.name for tool in (await client.list_tools()).tools}
+    prompts = {prompt.name for prompt in (await client.list_prompts()).prompts}
+    assert set(INSTRUCTED) <= tools | prompts  # every name the instructions use exists
 
 
 @pytest.mark.anyio
@@ -120,6 +136,46 @@ async def test_list_and_get_source(client: Client) -> None:
     body = tool_payload(await client.call_tool("get_source", {"id": source["id"]}))
     assert "31 items" in body or "verbatim" in body.lower()
     assert "Skeleton loading screens" in body
+
+
+# JON-1393 item 14: a name that doesn't exist is the caller's mistake. The client gets
+# the message (what's unknown and what exists) and the server logs no traceback.
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("tool", "args", "expected"),
+    [
+        ("get_practice", {"topic": "nope"}, ["Unknown practice 'nope'", "Available:", "performance"]),
+        ("get_practice", {"topic": "  "}, ["No practice id provided"]),
+        ("get_practice", {"topic": "../README"}, ["practice", "'../README'"]),
+        ("get_practice", {"topic": ".."}, ["Invalid practice id '..'"]),
+        ("get_source", {"id": "nope"}, ["Unknown source 'nope'", "Available:", "breakingbreach"]),
+        ("get_source", {"id": "2026"}, ["Ambiguous source id '2026'; matches:"]),
+    ],
+)
+async def test_a_missing_practice_or_source_reaches_the_client_named(
+    client: Client, caplog: pytest.LogCaptureFixture, tool: str, args: dict, expected: list[str]
+) -> None:
+    with caplog.at_level(logging.INFO, logger="mcp.server.mcpserver.server"):
+        result = await client.call_tool(tool, args)
+    assert result.is_error
+    text = result.content[0].text
+    assert text.startswith(f"Error executing tool {tool}: ")
+    assert all(part in text for part in expected), text
+    assert not [r for r in caplog.records if r.exc_info or r.levelno >= logging.ERROR]
+
+
+@pytest.mark.anyio
+async def test_other_file_errors_stay_generic(client: Client, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A KB file that resolves but can't be read is a server problem: its text stays on the server."""
+    from jdad import kb
+
+    def refuse(path: Path) -> str:
+        raise FileNotFoundError(f"{path} internal detail")
+
+    monkeypatch.setattr(kb, "read_kb_file", refuse)
+    for tool, args in (("get_practice", {"topic": "performance"}), ("get_source", {"id": "breakingbreach"})):
+        result = await client.call_tool(tool, args)
+        assert result.is_error and result.content[0].text == f"Error executing tool {tool}", result.content[0].text
 
 
 @pytest.mark.anyio
@@ -241,8 +297,11 @@ async def test_stdio_entry_point_serves_performance_content(newest_entry: str) -
             await stdio_client.call_tool("review_against_kb", {"changed_files": ["migrations/1.sql"], "summary": "add an index"})
         )
         assert review["tags"] == ["db"] and "perf.db.index-filters" in review["checklist"]
+        assert "review_against_kb" in (stdio_client.instructions or "")
         bad = await stdio_client.call_tool("review_against_kb", {"changed_files": ["a.sql"], "summary": "x", "tags": ["frontnd"]})
         assert bad.is_error and "'frontnd'" in bad.content[0].text
+        missing = await stdio_client.call_tool("get_practice", {"topic": "nope"})
+        assert missing.is_error and "Unknown practice 'nope'" in missing.content[0].text
 
 
 def _free_port() -> int:
