@@ -38,6 +38,27 @@ Sources: https://modelcontextprotocol.io/specification/2026-07-28, https://model
 - The current revision is **2026-07-28** (previous: 2025-11-25). Major changes: no protocol-level sessions or `Mcp-Session-Id`; no `initialize` handshake (each request carries protocol version and capabilities in `_meta`); a required `server/discover` RPC; `subscriptions/listen` replaces the GET endpoint and resource subscribe; `ping` and `logging/setLevel` removed; tasks moved to an extension; Multi Round-Trip Requests replace server-initiated requests.
 - Authorization for HTTP servers is OAuth 2.1-based; JDAD uses a static bearer token, which clients support through headers.
 
+### Protocol revision matrix (P3.6)
+
+The JDAD server serves both eras: the handshake era (`initialize`, 2025-11-25) and the stateless 2026-07-28 revision (`server/discover`, no session). It must not drop the handshake era while any target client row below fails or is unchecked.
+
+One row per pinned SDK version. `tests/test_protocol_revisions.py` produces these results, and it fails when the installed `mcp` has no row here.
+
+| SDK (pinned) | `initialize` (2025-11-25) | `server/discover` (2026-07-28) | Checked |
+| --- | --- | --- | --- |
+| `mcp` 2.3.0 (`mcp-types` 2.3.0) | pass on in-process, HTTP and stdio (`mode="legacy"`) | pass on in-process, HTTP and stdio (`mode="auto"` probes discover and negotiates 2026-07-28) | 2026-11-27, JON-1485 |
+
+Target clients, each run against a **local** JDAD server on loopback (no token; a throwaway `HOME` so no real client config was touched; never the production endpoint), with a logging wrapper recording the revision each request carried:
+
+| Client | Version | What it sent | Result |
+| --- | --- | --- | --- |
+| Claude Code | 2.1.332 | 2026-07-28: `server/discover`, then `subscriptions/listen` and `tools/list` (all 200) | pass: `claude mcp list` shows Connected |
+| Grok Build | 1.0.77 | 2026-07-28: `server/discover`, then `tools/list` (all 200) | pass: `grok mcp doctor` shows handshake OK (protocol 2026-07-28), 8 tools |
+| Codex | 0.155.1 | no MCP request: `codex mcp list` and `codex mcp get` only probe OAuth metadata (GETs, 404) | not checked: the handshake happens only inside a model session (`codex exec`), which needs a login and model calls |
+| Cursor | cursor-agent 2026.09.18-9a7762b | nothing (it didn't start) | not checked: `cursor-agent mcp` needs the macOS login keychain, so it can't run under a throwaway `HOME` |
+
+Checked 2026-11-27 (JON-1485). Two clients are unchecked, so the server keeps the handshake era.
+
 ## Borrow / skip
 
 | Call | What | Why |
@@ -46,5 +67,5 @@ Sources: https://modelcontextprotocol.io/specification/2026-07-28, https://model
 | Borrow | Agent Skills spec as JDAD's canonical skill format, spec-only frontmatter in the source | Loads everywhere; tool extras added by the compiler |
 | Borrow | `skills-ref validate` (or an equivalent check) in `./verify` | Catches the naming rules (directory = name) early |
 | Borrow | Agent Plugins as the Codex and Cursor distribution package | One package for two tools |
-| Watch | MCP 2026-07-28 statelessness | JDAD's tools are already stateless; track Python SDK support before upgrading (P3.6) |
+| Borrow | MCP 2026-07-28 statelessness | `mcp` 2.3.0 serves it alongside `initialize`, and Claude Code and Grok Build already use it (P3.6, matrix above). Keep the handshake era while any target client is unchecked or fails |
 | Skip | OAuth 2.1 for the JDAD server for now | Single user, read-only KB; a bearer token is enough. Revisit if others get access |
