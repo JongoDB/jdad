@@ -199,6 +199,27 @@ if ! docker run --rm --user "$(id -u):$(id -g)" --entrypoint /bin/sh "$IMG:$SHA"
 fi
 echo "ok /app is traversable and the compose uid can exec jdad-mcp"
 
+# --- ADR 0006 (JON-1482): the image serves the KB bundled at build time, with no
+# KB_ROOT, and refuses to start when its KB root can't load.
+image_root="$(docker run --rm --entrypoint python "$IMG:$SHA" -c 'import jdad.kb as k; print(k.resolve_kb_root())')"
+case "$image_root" in
+  */site-packages/jdad/data) ;;
+  *)
+    echo "FAIL the image's KB root is $image_root, expected the bundled .../site-packages/jdad/data" >&2
+    exit 1
+    ;;
+esac
+echo "ok the image serves its bundled KB ($image_root)"
+if bad_out="$(docker run --rm -e KB_ROOT=/nope "$IMG:$SHA" jdad-mcp </dev/null 2>&1)"; then
+  echo "FAIL jdad-mcp started in the image with KB_ROOT=/nope" >&2
+  exit 1
+fi
+if ! grep -q "missing practices/ or sources/" <<<"$bad_out"; then
+  echo "FAIL jdad-mcp with KB_ROOT=/nope exited without naming the problem: $bad_out" >&2
+  exit 1
+fi
+echo "ok jdad-mcp in the image refuses to start on a KB root that can't load"
+
 # --- self-signed Origin cert, then the README install (isolated project)
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 \
   -days 1 -nodes \
