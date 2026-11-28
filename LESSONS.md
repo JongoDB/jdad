@@ -85,3 +85,9 @@ Things a reviewer caught that an agent should have known (AGENTS.md R-flow-7). R
 - What happened: #40 (JON-1393 item 14) had no plan on the Linear card. The first comment about item 14 came 17 seconds after the fix commit, so Checker failed the PR on process (R-flow-2). A retroactive plan was posted on JON-1393 afterwards.
 - Rule: for every item, including follow-ups drafted one after another on one card, post the plan (steps, risks, how each acceptance criterion is checked) on the card before the first commit for that item, test commits included. Check the comment's timestamp is earlier than the commit's.
 - Source: https://github.com/JongoDB/jdad/pull/40 (Checker verdict at 00986740)
+
+## 2026-11-27: Quote a comment's createdAt; never hand-write when it was posted
+
+- What happened: plan comments on JON-1393 said when they were posted in hand-written ET times that didn't match Linear's `createdAt`: "18:40" for 18:36, "18:44" for 18:37, "19:10" for 19:09 and "19:17" for 19:16. Checker flagged it twice, on #40's re-check and on #41. "Plan before the first commit" is proven by comparing those times with commit times, so a wrong one weakens the evidence even when the order holds.
+- Rule: post the comment first, then quote its `createdAt` as Linear returns it, in UTC with the ET conversion (e.g. `2026-11-28T00:09:12Z = 19:09:12 ET`), wherever a card, PR body, status file or note says when it was posted. If the comment's own text states a time, edit it to that value afterwards.
+- Source: https://github.com/JongoDB/jdad/pull/41 (Checker's pass at 321121f, relayed by Daisy); first flagged after #40 (JON-1393 comment 4b931742)
