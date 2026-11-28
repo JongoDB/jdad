@@ -121,6 +121,7 @@ def test_duplicate_cite_as_fails(tmp_path: Path) -> None:
         ("(src: tips #4, #1, #4, #1)", "item(s) #4, #1 cited more than once"),
         ("(src: tips #2, #2, #2)", "item(s) #2 cited more than once"),
         ("(src: tips #4, #1, #1, #4)", "item(s) #4, #1 cited more than once"),  # first-appearance order
+        ("(src: tips #11, #11)", "item(s) #11, #11 outside 1..10"),  # the range check is reported first
         ("(src: tips)", "isn't '(src: <cite_as> #n[, #m])'"),
         ("(src: Tips #1)", "isn't '(src: <cite_as> #n[, #m])'"),
     ],
