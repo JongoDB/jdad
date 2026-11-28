@@ -1,0 +1,70 @@
+# 0006: The hosted server's KB root: bundled data, no required `KB_ROOT`
+
+- Status: Proposed
+- Date: 2026-11-27
+- Deciders: Jon (approve), authoring agent (JON-1482)
+
+## Context
+
+Roadmap P0.10 (KB poisoning defences, JON-1341, PR #8) has one open acceptance criterion: "a decision recorded on whether the hosted server requires `KB_ROOT`". The question came from Checker's pass of #8: should the hosted server have to be told where its KB is (for example `KB_ROOT=/app/kb` in the Dockerfile), or may it keep finding it on its own?
+
+How the root is found today (`resolve_kb_root` in `src/jdad/kb.py`):
+
+1. an explicit argument;
+2. `KB_ROOT`;
+3. the jdad source checkout the module runs from (an editable install);
+4. the `jdad/data` package data bundled in the wheel.
+
+It never walks up from the current directory, which was threat 2 in [the threat model](../threat-model.md) ("Wrong KB served"). These tests pin that order: `test_resolve_kb_root_ignores_the_current_directory`, `test_kb_root_env_still_wins` and `test_installed_wheel_layout_uses_bundled_data_not_parents` in `tests/test_kb.py`, and `test_missing_kb_root_fails` in `tests/test_check.py`.
+
+The two deploy layouts:
+
+- **Docker (the live deploy, [ADR 0005](0005-hosted-deploy-cloudflare-full-strict.md)).**
+  - The Dockerfile copies `practices/` and `sources/`, installs the package with `uv sync --no-editable`, and runs `jdad-mcp --check` from `/` at build time, so a KB that doesn't load fails the build.
+  - The runtime stage copies only the venv. There's no checkout in the image, and neither the Dockerfile nor the compose file sets `KB_ROOT`.
+  - So the server serves the bundled copy, taken at the image's build SHA. `kb_version` takes its SHA from `JDAD_GIT_SHA`, which is set at build time.
+- **Legacy systemd** (`deploy/jdad.service`): sets `KB_ROOT=/opt/jdad`, the checkout.
+
+What was checked for this ADR (2026-11-27, main 2eeb396; JON-1482 has the output):
+
+- **Install.** A wheel built from main and installed non-editable in a clean venv, the same layout as the image. Run from a directory that has its own `practices/`, it resolves to the bundled `jdad/data`; the source checkout is `None`, and the stray `practices/` isn't used.
+- **Bundled data.** It holds the same 10 files as `git ls-files practices sources`, byte for byte.
+- **A bad `KB_ROOT`.** `KB_ROOT=/nope`, or a directory without `practices/`, raises `FileNotFoundError: KB root … is missing practices/ or sources/`, and `jdad-mcp --check` exits 1.
+- **A running server with a bad `KB_ROOT`.** `jdad-mcp --http` with `KB_ROOT=/nope` **still starts**:
+  - `/healthz` returns `200 {"status":"ok"}`;
+  - `initialize` succeeds;
+  - every tool call fails with the generic `Error executing tool …`, and the server logs a traceback.
+  The root is resolved on each call, not at start-up, so a bad `KB_ROOT` doesn't show up until a tool call fails.
+- **Not yet run inside the built image itself.** Docker was stopped on the authoring machine. The wheel install reproduces the image's layout, but the in-image run is listed as unverified on JON-1482.
+
+## Decision
+
+1. **The hosted (Docker) server does not require `KB_ROOT`.** It serves the KB bundled into the image at build time. The Dockerfile and compose file don't set `KB_ROOT`, and an operator shouldn't set it on the droplet.
+2. **The KB root is never taken from the current directory**, in any layout. The tests above keep this.
+3. **A KB root that can't be loaded must stop the server at start-up, not pass `/healthz`.** `jdad-mcp --http` and stdio resolve and load the KB root once before serving, and exit non-zero with the `FileNotFoundError` message when it fails. This applies whether the root came from `KB_ROOT`, the checkout or the bundled data. That change is a follow-up item, with a failing test first; it isn't in the PR that records this ADR.
+4. The legacy systemd layout keeps `KB_ROOT=/opt/jdad`. Decision 3 covers a mistyped value there too.
+
+An agent can check compliance:
+- `grep -n KB_ROOT Dockerfile` (and the compose file) finds nothing;
+- `tests/test_kb.py`'s resolution tests pass;
+- once decision 3 lands, a start-up test with a missing KB root shows a non-zero exit before any request is served.
+
+## Consequences
+
+- **Easier.**
+  - The image is self-contained. What it serves is exactly what passed `jdad-mcp --check` at build time, at the build's SHA.
+  - There's no extra variable to get wrong on the droplet.
+  - A rollback to an older image serves that image's KB, which is what a rollback should do.
+- **Harder.**
+  - Changing the hosted KB always means a rebuild and redeploy (already true: `update-docker.sh` rebuilds on every deploy).
+  - Pointing a container at a mounted KB for debugging means setting `KB_ROOT` by hand. That still works, because `KB_ROOT` keeps priority.
+- **To maintain.**
+  - The `force-include` of `practices/` and `sources/` in `pyproject.toml`.
+  - The build-time `--check` in the Dockerfile.
+  - Decision 3's start-up check once it lands.
+
+## Alternatives considered
+
+- **(b) Set `KB_ROOT=/app/kb` in the Dockerfile and copy the KB there.** It makes the root explicit. But it ships a second copy of the KB next to the bundled one, adds an image change and a redeploy, and stops no threat the current order doesn't already stop. It also leaves the start-up gap in decision 3 open.
+- **(c) Refuse `--http` on a non-loopback bind unless `KB_ROOT` is set.** It forces operators to be explicit. But on its own it breaks the current Docker deploy (it would need (b) as well). It doesn't address threat 2, which the resolution order already handles. And a required variable is one more thing that can be set wrong: today a wrong value gives a green `/healthz` and failing tools.
+- **(a) as is, without decision 3.** It's acceptable for the Docker deploy, where `KB_ROOT` is unset and the build checks the KB. But any layout that sets `KB_ROOT` (systemd, a manual run) can still serve a healthy-looking endpoint with no KB. Hence decision 3.
