@@ -71,11 +71,61 @@ def test_no_rule_ids_outside_their_homes() -> None:
     assert mentioned <= table_ids, f"AGENTS.md mentions IDs with no table row: {mentioned - table_ids}"
 
 
+def _words(text: str) -> list[str]:
+    """Lowercase words with Markdown and punctuation stripped."""
+    return re.findall(r"[a-z0-9][a-z0-9.@/_-]*[a-z0-9]|[a-z0-9]", text.lower())
+
+
+def _statements(text: str) -> list[list[str]]:
+    """Each line, and each table cell, as a word list; short ones are skipped."""
+    out = []
+    for line in text.splitlines():
+        for part in line.split("|") if line.lstrip().startswith("|") else [line]:
+            words = _words(part)
+            if len(words) >= 6:
+                out.append(words)
+    return out
+
+
+def near_duplicates(claude: str, agents: str, threshold: float = 0.8) -> list[str]:
+    """CLAUDE.md statements that repeat an AGENTS.md one: the same words in
+    a different case or punctuation, one inside the other, or at least
+    `threshold` word overlap (Jaccard)."""
+    agents_statements = _statements(agents)
+    found = []
+    for words in _statements(claude):
+        mine, joined = set(words), " ".join(words)
+        for other in agents_statements:
+            theirs, other_joined = set(other), " ".join(other)
+            if (
+                joined in other_joined
+                or other_joined in joined
+                or len(mine & theirs) / len(mine | theirs) >= threshold
+            ):
+                found.append(joined)
+                break
+    return found
+
+
+def test_near_duplicate_detector_catches_reworded_copies() -> None:
+    agents = "| R-x-1 | Run `./verify` and keep the output. It must end `verify: ok`, or the PR says exactly what didn't run. |"
+    assert near_duplicates("Run ./verify and keep the output; it must end verify: ok, or the PR says exactly what didn't run.", agents)
+    assert near_duplicates("- **Run `./verify`** and keep the output. It must end `verify: ok`.", agents)  # contained
+    assert near_duplicates("Always run ./verify and keep its output: it must end verify: ok or the PR says what didn't run.", agents)
+    assert not near_duplicates("Claude Code reads this file and expands environment variables in plugin config.", agents)
+
+
 def test_claude_md_restates_nothing_from_agents_md() -> None:
-    agents_lines = {line.strip() for line in AGENTS.splitlines() if len(line.strip()) >= 40}
-    repeated = [line.strip() for line in CLAUDE.splitlines() if line.strip() in agents_lines]
-    assert not repeated, f"lines in both files: {repeated}"
+    repeated = near_duplicates(CLAUDE, AGENTS)
+    assert not repeated, f"CLAUDE.md restates AGENTS.md: {repeated}"
     # The distinctive rules that used to live in CLAUDE.md now live only in AGENTS.md.
     for phrase in ("lockstep", "kb://practices/", "--no-optional-locks", "Deduplicate", "_TEMPLATE.md"):
         assert phrase in AGENTS, phrase
         assert phrase not in CLAUDE, phrase
+
+
+def test_pr_template_asks_for_verify_disclosure() -> None:
+    """R-flow-5 and R-flow-6: every PR shows its evidence or says what didn't run."""
+    template = (REPO_ROOT / ".github" / "pull_request_template.md").read_text()
+    for phrase in ("What changed and why", "Evidence", "Unverified", "verify: ok", "R-flow-5", "didn't run"):
+        assert phrase in template, phrase
