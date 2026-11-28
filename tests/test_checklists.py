@@ -232,6 +232,9 @@ def test_citations_keep_their_item_numbers() -> None:
         ("(src: guide #1,#3)", "#1, #3"),  # spacing normalised
         ("(src: guide #01)", "#1"),  # leading zero dropped
         ("(src: guide  #2 ,  #5)", "#2, #5"),
+        # Checker on #37 (JON-1393 item 7): items stay in the order they're written, not sorted
+        ("(src: guide #3, #1)", "#3, #1"),
+        ("(src: guide #5,#2, #4)", "#5, #2, #4"),
     ],
 )
 def test_cited_item_lists_are_kept_and_normalised(tmp_path: Path, citation: str, shown: str) -> None:

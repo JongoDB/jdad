@@ -63,11 +63,13 @@ Deferred (Jon, 2026-11-22 3:16 PM ET): **P3.2** semantic search and the droplet 
   - Deliverables: compose `mem_limit`, `pids_limit`, `cpus` and log rotation; `jdad-mcp --check` in the image build and before the swap in `update-docker.sh`; rollback resets the checkout to the previous SHA; NetBird documented as kept stopped; an external uptime check on `/healthz`; `docs/ops/rebuild-runbook.md`; a token rotation runbook.
   - Acceptance: the Docker suite asserts the limits and log options, refuses a commit that breaks only the KB before the swap (running image unchanged), and shows the checkout back on the previous SHA after a rollback; `jdad-mcp --check` has a failing test for a non-UTF-8 practice, a symlink and an unreadable source. Runtime: one rotation rehearsed on the droplet (old token 401, new token 200); without it the item stays open as runtime unverified.
   - Depends on: P0.8 (PR #9's token file). Decision (Jon, 2026-11-22 3:16 PM ET): keep the stopped NetBird stack and document it.
-- [ ] **P0.10 KB poisoning defences, including at runtime** (red-team H4 and M3, JON-1341, PR #8)
+- [x] **P0.10 KB poisoning defences, including at runtime** (red-team H4 and M3, JON-1341, PR #8; JON-1482)
   - Goal: text in `practices/` or `sources/` can't steer agents, and the server never serves a file from outside the KB.
   - Deliverables: `jdad lint-kb` in `./verify` (agent-addressed text, URLs and shell in practices, hidden Unicode, comments, symlinks, non-`.md` files, file size); `get_source` output marked as quoted third-party material; the KB root never taken from the current directory; **the runtime symlink fix (Checker on #8, 0a5b7d0)**: files opened with `O_NOFOLLOW`, and symlinked files and directories, non-regular files, anything resolving outside the KB root, and files over 1 MiB skipped by every tool and resource; `docs/threat-model.md`; draft CODEOWNERS.
   - Acceptance: `tests/test_lint.py` and `tests/test_kb_files.py` pass in `./verify`, including the `practices/hosts.md -> /etc/hosts` repro (refused by `get_practice`, absent from `list_topics`); `jdad lint-kb` is clean on the repo; the 5 lint bypasses from Checker's verdict on #8 each get a failing fixture (done in #8: `tests/test_lint.py`); a decision recorded on whether the hosted server requires `KB_ROOT` (follow-up).
   - Depends on: nothing. P1.2 builds on it.
+  - Decision (Jon, 2026-11-27 9:45 PM CT, question 348a): [ADR 0006](docs/adr/0006-hosted-kb-root.md) is accepted as written. The Docker deploy serves the KB bundled into the image and doesn't require `KB_ROOT`, and the server refuses to start if its KB can't load.
+  - Evidence (2026-11-27, JON-1482): on main 2eeb396 the lint and file tests pass (with the `/etc/hosts` repro), `jdad lint-kb` is clean, and Checker's five bypass classes are caught (`test_checker_bypasses_are_caught`). ADR 0006 is implemented by `require_kb()` in `src/jdad/server.py`: `tests/test_startup.py` covers stdio and `--http` in process and as real processes, plus the static no-`KB_ROOT` check, and `tests/test_docker.sh` checks the image's bundled root and its refusal to start with `KB_ROOT=/nope`.
 
 ## Phase 1: One source of truth
 
@@ -170,15 +172,21 @@ Goal: richer, still read-only and offline tools. ([ADR 0003](docs/adr/0003-stdio
   - Deliverables: `kb://templates/{path}` resources for every harness template; `bootstrap_repo(tools, stack)` returns a manifest of `{path, content, mode}` for the client to write. The server writes nothing.
   - Acceptance: for each `tools × stack` fixture, tests assert the `bootstrap_repo` manifest equals `jdad init --dry-run` output; a new test snapshots the repo and temp dirs (paths, sizes, mtimes) before and after `bootstrap_repo` and asserts no change. (Today's tests check read-only tool annotations and path traversal, not filesystem writes, so this test is new.)
   - Depends on: P4.3.
-- [ ] **P3.6 MCP spec 2026-07-28 readiness and tool evals**
-  - Deliverables: track the Python SDK's support for the stateless revision (`server/discover`, no `initialize`); upgrade when released; a 10-task tool-use eval (agent asked KB questions; graded on correct tool and rule ID).
-  - Acceptance: `docs/research/open-standards.md` has a matrix row per pinned SDK version with pass/fail for `initialize` and `server/discover`; the server doesn't switch protocol revisions while any target client row fails; 10 labeled KB tasks are committed, and the eval shows ≥ 9 correct tool choices and ≥ 9 correct rule IDs.
+- [x] **P3.6 MCP spec 2026-07-28 readiness** (JON-1485)
+  - Deliverables: track the Python SDK's support for the stateless revision (`server/discover`, no `initialize`); upgrade when released.
+  - Acceptance: `docs/research/open-standards.md` has a matrix row per pinned SDK version with pass/fail for `initialize` and `server/discover`; the server doesn't switch protocol revisions while any target client row fails.
   - Depends on: P3.1.
+  - Split (2026-11-27, JON-1485): the tool-use eval moved to P3.8, because it needs real agent runs with model calls (P6.2's runner, keys and budget). Its deliverable and acceptance moved word for word.
+  - Evidence (2026-11-27, JON-1485): the pinned `mcp` 2.3.0 already serves the stateless revision, so there was nothing to upgrade. `tests/test_protocol_revisions.py` shows `initialize` at 2025-11-25 and `server/discover` negotiating 2026-07-28 (`mode="auto"`), each followed by `tools/list` and `kb_version`, on in-process, HTTP and stdio. It also fails when the installed `mcp` has no row in the matrix in `docs/research/open-standards.md`. The server keeps the handshake era (pinned by the `legacy` test). Of the target clients, Claude Code 2.1.332 and Grok Build 1.0.77 used 2026-07-28 against a local server; Codex and Cursor are unchecked (no handshake without a model session, and keychain-bound respectively), which is why the handshake era stays.
 - [x] **P3.7 Token UX via plugin `userConfig`**
   - Deliverables: Claude plugin `userConfig.jdad_token` with `sensitive: true`, used in the MCP header; README update; env-var path kept as fallback.
   - Acceptance: `claude plugin validate .` exits 0. Runtime: with an ephemeral, local-only test token (generated for the run, never a real JDAD token), a local server shows 200 for the prompted token and 401 for a missing or wrong token; the PR shows a transcript with the token redacted; `grep` for the token value over server logs and the PR body finds nothing; the test token is then destroyed. Without a Claude CLI the item stays open as runtime unverified.
   - Depends on: P0.3.
   - Evidence (2026-11-24, JON-1345, PR #15, approved by Jon 10:12 AM ET): `userConfig.jdad_token` (`sensitive: true`) and `.mcp.json` sending `Bearer ${user_config.jdad_token}`; `claude plugin validate .` passes. `tests/test_plugin_userconfig_runtime.sh` (opt-in, throwaway containers, ephemeral token) on Claude Code 2.1.330 and 2.1.331: unset and wrong tokens get 401, the configured token 200, the value isn't in `settings.json`, the server logs or the output. The env-var fallback can't live in the plugin (`${user_config.x:-${VAR}}` fails to load), so it's a documented user-scope `jdad-env` entry, also tested. Breaking for plugin users who relied on `JDAD_TOKEN`: version 0.8.0.
+- [ ] **P3.8 KB tool-use eval** (split from P3.6, JON-1485)
+  - Deliverables: a 10-task tool-use eval (agent asked KB questions; graded on correct tool and rule ID).
+  - Acceptance: 10 labeled KB tasks are committed, and the eval shows ≥ 9 correct tool choices and ≥ 9 correct rule IDs.
+  - Depends on: P3.1, P6.2 (the headless runner, its API keys and its budget cap).
 
 ## Phase 4: Harness templates and `jdad init`
 
