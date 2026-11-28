@@ -46,6 +46,21 @@ def tool_payload(result) -> object:
         return texts[0]
 
 
+INSTRUCTED = ("get_checklist", "search_practices", "review_against_kb", "kb_version", "get_source", "review-against-kb")
+
+
+@pytest.mark.anyio
+async def test_server_instructions_name_the_review_tool_and_prompt(client: Client) -> None:
+    """What clients get at initialize. No test pinned it: Checker's #38 mutant M38 dropped
+    review_against_kb and survived (JON-1393 item 17)."""
+    text = client.instructions or ""
+    missing = [name for name in INSTRUCTED if name not in text]
+    assert not missing, (missing, text)
+    tools = {tool.name for tool in (await client.list_tools()).tools}
+    prompts = {prompt.name for prompt in (await client.list_prompts()).prompts}
+    assert set(INSTRUCTED) <= tools | prompts  # every name the instructions use exists
+
+
 @pytest.mark.anyio
 async def test_lists_every_tool_as_read_only(client: Client) -> None:
     listed = await client.list_tools()
@@ -282,6 +297,7 @@ async def test_stdio_entry_point_serves_performance_content(newest_entry: str) -
             await stdio_client.call_tool("review_against_kb", {"changed_files": ["migrations/1.sql"], "summary": "add an index"})
         )
         assert review["tags"] == ["db"] and "perf.db.index-filters" in review["checklist"]
+        assert "review_against_kb" in (stdio_client.instructions or "")
         bad = await stdio_client.call_tool("review_against_kb", {"changed_files": ["a.sql"], "summary": "x", "tags": ["frontnd"]})
         assert bad.is_error and "'frontnd'" in bad.content[0].text
         missing = await stdio_client.call_tool("get_practice", {"topic": "nope"})

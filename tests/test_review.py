@@ -204,6 +204,11 @@ def test_an_unknown_tag_is_an_error_that_names_it() -> None:
         build_review(KnowledgeBase(FIXTURE), ["api/x.py"], "x", tags=["frontnd"])
 
 
+def test_unknown_tag_error_is_a_value_error() -> None:
+    """Callers outside the server catch ValueError (Checker on #39, mutant I9j; JON-1393 item 16)."""
+    assert issubclass(UnknownTagError, ValueError)
+
+
 def test_no_tags_means_no_rules_and_a_note() -> None:
     review = build_review(KnowledgeBase(FIXTURE), ["README.md"], "docs only")
     assert review["tags"] == [] and review["checklist"] == "" and review["relevant"] == []
