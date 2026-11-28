@@ -91,3 +91,9 @@ Things a reviewer caught that an agent should have known (AGENTS.md R-flow-7). R
 - What happened: plan comments on JON-1393 said when they were posted in hand-written ET times that didn't match Linear's `createdAt`: "18:40" for 18:36, "18:44" for 18:37, "19:10" for 19:09 and "19:17" for 19:16. Checker flagged it twice, on #40's re-check and on #41. "Plan before the first commit" is proven by comparing those times with commit times, so a wrong one weakens the evidence even when the order holds.
 - Rule: post the comment first, then quote its `createdAt` as Linear returns it, in UTC with the ET conversion (e.g. `2026-11-28T00:09:12Z = 19:09:12 ET`), wherever a card, PR body, status file or note says when it was posted. If the comment's own text states a time, edit it to that value afterwards.
 - Source: https://github.com/JongoDB/jdad/pull/41 (Checker's pass at 321121f, relayed by Daisy); first flagged after #40 (JON-1393 comment 4b931742)
+
+## 2026-11-28: A mutant changes only what its label names
+
+- What happened: #43 (JON-1482) claimed 8 of 8 mutants killed. The mutant labelled "preflight skips loading practices" dropped `kb.practices()` and also hard-coded the KB root, so `KB_ROOT` was ignored; that second change is what the tests caught. Dropping only the call passed 1148/1148, and the call can't fail at all (`Path.glob` lists an unreadable `practices/` as empty). Checker failed the PR on the false claim.
+- Rule: each mutant edits only the spot its label names (the harness asserts every edit falls on the lines of its one anchor), and a call counts as covered only if some input can make it matter. A survivor that can't be killed is reported as one (N-1 of N, naming the line), not hidden behind a wider mutant.
+- Source: https://github.com/JongoDB/jdad/pull/43 (Checker verdict at 41b9a75, relayed by Daisy); fixed at cd330ea
