@@ -222,6 +222,26 @@ def test_a_blank_summary_gets_no_relevant_hits() -> None:
     assert "rev.backend.timeouts" in review["checklist"]
 
 
+def test_every_unknown_tag_is_named_and_known_ones_are_not() -> None:
+    """Checker on #39, mutant H54 (JON-1393 item 18): not just the first."""
+    with pytest.raises(UnknownTagError) as excinfo:
+        build_review(KnowledgeBase(FIXTURE), ["api/x.py"], "x", tags=["frontnd", "ci", "bakend"])
+    named = str(excinfo.value).split(":", 1)[0]
+    assert named == "unknown tag(s) 'frontnd', 'bakend'"
+
+
+@pytest.mark.parametrize(
+    ("files", "tags"),
+    [(["api/x.py"], None), (["README.md"], ["ci"])],
+    ids=["inferred", "passed"],
+)
+def test_the_note_is_none_when_there_are_tags(files: list[str], tags: list[str] | None) -> None:
+    """Checker on #39, mutant H29 (JON-1393 item 18): None, not an empty string."""
+    review = build_review(KnowledgeBase(FIXTURE), files, "x", tags=tags)
+    assert review["tags"]
+    assert review["note"] is None
+
+
 def test_relevant_hits_carry_id_heading_and_snippet() -> None:
     review = build_review(KnowledgeBase(FIXTURE), ["api/x.py"], "timeout on outbound calls")
     hit = review["relevant"][0]
@@ -340,6 +360,44 @@ async def test_the_prompt_names_the_tool_and_the_format(client: Client) -> None:
     assert "review_against_kb" in text and "api/x.py" in text and "add retries" in text
     assert all(field in text for field in FINDING_FIELDS)
     assert "skip style" in text.lower()
+
+
+# Checker on #39, mutants H40-H44 (JON-1393 item 18): the parts of the prompt an agent
+# acts on. Only these phrases are pinned, not the whole text.
+PROMPT_PHRASES = {
+    "H40 fields, in order": "Report each finding as rule_id / file / evidence / severity,",
+    "H41 kb_version": "Note the kb_version the review used.",
+    "H42 correctness rule_id": 'use rule_id "correctness" for a correctness problem no rule covers',
+    "H43 no findings": 'If nothing is wrong, say "no findings".',
+}
+
+
+@pytest.mark.parametrize("phrase", PROMPT_PHRASES.values(), ids=PROMPT_PHRASES.keys())
+def test_the_prompt_keeps_the_instructions_an_agent_acts_on(phrase: str) -> None:
+    from jdad import server
+
+    assert phrase in server.review_against_kb_prompt(changed_files="api/x.py", summary="x")
+
+
+@pytest.mark.parametrize(
+    "changed_files",
+    ["api/x.py, a.sql", "api/x.py\na.sql", "api/x.py\n\n a.sql ,", " ,api/x.py,\n,a.sql\n"],
+    ids=["commas", "newlines", "blank-line-and-trailing-comma", "blanks-everywhere"],
+)
+def test_the_prompt_splits_files_on_commas_and_newlines_and_drops_blanks(changed_files: str) -> None:
+    """Checker on #39, mutant H44."""
+    from jdad import server
+
+    text = server.review_against_kb_prompt(changed_files=changed_files, summary="x")
+    assert " The changed files are: api/x.py, a.sql. " in text
+
+
+def test_the_prompt_asks_for_the_files_when_none_are_given() -> None:
+    from jdad import server
+
+    text = server.review_against_kb_prompt(changed_files=" \n , ", summary="x")
+    assert "The changed files are" not in text
+    assert " List the changed files from the diff." in text
 
 
 def test_jdad_review_calls_the_tool_and_uses_the_format() -> None:

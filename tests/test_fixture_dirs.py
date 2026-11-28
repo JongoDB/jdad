@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 IGNORED = {"__pycache__", ".pytest_cache", ".ruff_cache"}
 
@@ -25,9 +27,57 @@ def empty_dirs(root: Path) -> list[str]:
     return found
 
 
-def test_no_fixture_directory_is_empty() -> None:
-    empty = empty_dirs(FIXTURES)
+def check_fixtures(root: Path) -> None:
+    """The guard itself: the root exists and has fixture dirs, and none of them is empty.
+
+    Without the first two checks a missing or empty tests/fixtures/ would pass
+    (Checker on #39, JON-1393 item 18)."""
+    assert root.is_dir(), f"{root} is missing"
+    assert any(p.is_dir() and p.name not in IGNORED for p in root.iterdir()), f"{root} has no fixture directories"
+    empty = empty_dirs(root)
     assert not empty, f"git won't track these empty fixture dirs; add a .gitkeep to each: {empty}"
+
+
+def test_no_fixture_directory_is_empty() -> None:
+    check_fixtures(FIXTURES)
+
+
+@pytest.mark.parametrize(
+    ("layout", "message"),
+    [
+        ([], "is missing"),
+        (["fixtures/"], "has no fixture directories"),
+        (["fixtures/__pycache__/"], "has no fixture directories"),
+        (["fixtures/README.md"], "has no fixture directories"),
+        (["fixtures/review/x.md", "fixtures/review/sources/"], "add a .gitkeep"),
+    ],
+    ids=["missing", "empty", "only-a-cache-dir", "only-a-file", "an-empty-subdir"],
+)
+def test_the_guard_fails_on_a_missing_or_empty_root(tmp_path: Path, layout: list[str], message: str) -> None:
+    for rel in layout:
+        target = tmp_path / rel
+        if rel.endswith("/"):
+            target.mkdir(parents=True, exist_ok=True)
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("x")
+    with pytest.raises(AssertionError, match=message):
+        check_fixtures(tmp_path / "fixtures")
+
+
+@pytest.mark.parametrize("cache", sorted(IGNORED))
+def test_every_ignored_cache_dir_is_ignored(tmp_path: Path, cache: str) -> None:
+    """Checker on #39, mutant H55: the whole ignore list, not just __pycache__.
+
+    An empty cache dir isn't reported, and a file that lives only in a cache dir
+    doesn't make its parent count as non-empty."""
+    assert IGNORED == {"__pycache__", ".pytest_cache", ".ruff_cache"}
+    (tmp_path / "kb" / "real").mkdir(parents=True)
+    (tmp_path / "kb" / "real" / "a.md").write_text("x")
+    (tmp_path / "kb" / "real" / cache).mkdir()
+    (tmp_path / "kb" / "only_cache" / cache).mkdir(parents=True)
+    (tmp_path / "kb" / "only_cache" / cache / "x").write_bytes(b"")
+    assert empty_dirs(tmp_path) == ["kb/only_cache"]
 
 
 def test_the_check_finds_an_empty_directory(tmp_path: Path) -> None:
